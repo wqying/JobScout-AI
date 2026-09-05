@@ -1,0 +1,21 @@
+{
+  "name": "jobscout-ai",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.24.0",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @jobscout/web dev",
+    "build": "pnpm --filter @jobscout/web build",
+    "lint": "pnpm --filter @jobscout/web lint",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "pnpm --filter @jobscout/web test",
+    "typecheck": "pnpm --filter @jobscout/web typecheck"
+  },
+  "devDependencies": {
+    "prettier": "3.6.2"
+  }
+}

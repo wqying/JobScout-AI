@@ -1,0 +1,5 @@
+DESIGN_DOC.md
+pnpm-lock.yaml
+services/api/
+node_modules/
+.next/

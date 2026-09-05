@@ -1,0 +1,86 @@
+{
+  "interpretation": {
+    "normalized_label": "Gaming companies",
+    "slug": "gaming-companies",
+    "included_segments": ["video games", "game development"],
+    "excluded_segments": ["gambling"],
+    "target_role_families": ["software engineering", "data", "AI"],
+    "country_code": "US"
+  },
+  "companies": [
+    {
+      "canonical_name": "Acme Games",
+      "aliases": ["Acme"],
+      "proposed_legal_entities": ["Acme Games Inc"],
+      "official_website_url": "https://acme-games.example",
+      "official_careers_source_id": "source_3",
+      "industry_relevance": 90,
+      "industry_explanation": "Acme Games develops and publishes video games for US players.",
+      "has_internship_evidence": true,
+      "source_references": [
+        {
+          "source_id": "source_1",
+          "source_type": "official_company",
+          "supports_claims": ["industry", "official_identity"]
+        },
+        {
+          "source_id": "source_2",
+          "source_type": "official_company",
+          "supports_claims": ["internship"]
+        },
+        {
+          "source_id": "source_3",
+          "source_type": "search_lead",
+          "supports_claims": ["careers_page"]
+        }
+      ],
+      "unresolved_questions": []
+    },
+    {
+      "canonical_name": "Pixel Forge",
+      "aliases": [],
+      "proposed_legal_entities": [],
+      "official_website_url": "https://pixel-forge.example",
+      "official_careers_source_id": "source_6",
+      "industry_relevance": 95,
+      "industry_explanation": "Pixel Forge is an independent US game development studio.",
+      "has_internship_evidence": true,
+      "source_references": [
+        {
+          "source_id": "source_4",
+          "source_type": "official_company",
+          "supports_claims": ["industry", "official_identity"]
+        },
+        {
+          "source_id": "source_5",
+          "source_type": "official_company",
+          "supports_claims": ["internship"]
+        },
+        {
+          "source_id": "source_6",
+          "source_type": "search_lead",
+          "supports_claims": ["careers_page"]
+        }
+      ],
+      "unresolved_questions": []
+    },
+    {
+      "canonical_name": "Unsourced Studio",
+      "aliases": [],
+      "proposed_legal_entities": [],
+      "official_website_url": "https://unsourced.example",
+      "official_careers_source_id": null,
+      "industry_relevance": 100,
+      "industry_explanation": "This intentionally invalid fixture candidate cites another domain.",
+      "has_internship_evidence": false,
+      "source_references": [
+        {
+          "source_id": "source_1",
+          "source_type": "official_company",
+          "supports_claims": ["industry"]
+        }
+      ],
+      "unresolved_questions": []
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+[
+  {
+    "source_id": "source_1",
+    "url": "https://acme-games.example/about",
+    "title": "About Acme Games"
+  },
+  {
+    "source_id": "source_2",
+    "url": "https://acme-games.example/students",
+    "title": "Student programs"
+  },
+  {
+    "source_id": "source_3",
+    "url": "https://jobs.lever.co/acme-games/deep-job-id?utm_source=openai",
+    "title": "Acme Games job"
+  },
+  {
+    "source_id": "source_4",
+    "url": "https://pixel-forge.example/company",
+    "title": "Pixel Forge company"
+  },
+  {
+    "source_id": "source_5",
+    "url": "https://pixel-forge.example/internships",
+    "title": "Pixel Forge internships"
+  },
+  {
+    "source_id": "source_6",
+    "url": "https://jobs.ashbyhq.com/pixel-forge/deep-job-id",
+    "title": "Pixel Forge job"
+  }
+]

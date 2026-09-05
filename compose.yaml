@@ -1,0 +1,139 @@
+name: jobscout
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: jobscout
+      POSTGRES_USER: jobscout
+      POSTGRES_PASSWORD: jobscout
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - jobscout-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobscout -d jobscout"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: ./services/api
+      dockerfile: ../../infra/docker/api.Dockerfile
+    restart: unless-stopped
+    command: .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+    environment: &api-environment
+      APP_ENV: container
+      APP_BASE_URL: http://127.0.0.1:3000
+      WEB_HOST: 0.0.0.0
+      API_HOST: 0.0.0.0
+      ALLOW_REMOTE_ACCESS: "true"
+      DATABASE_URL: postgresql+asyncpg://jobscout:jobscout@postgres:5432/jobscout
+      REDIS_URL: redis://redis:6379/0
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_RESEARCH_MODEL: ${OPENAI_RESEARCH_MODEL:-gpt-5.6-luna}
+      OPENAI_STRUCTURED_MODEL: ${OPENAI_STRUCTURED_MODEL:-gpt-5.6-luna}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_RESEARCH_MAX_OUTPUT_TOKENS: ${OPENAI_RESEARCH_MAX_OUTPUT_TOKENS:-6000}
+      OPENAI_STRUCTURED_MAX_OUTPUT_TOKENS: ${OPENAI_STRUCTURED_MAX_OUTPUT_TOKENS:-10000}
+      OPENAI_MAX_WEB_SEARCH_CALLS: ${OPENAI_MAX_WEB_SEARCH_CALLS:-6}
+      OPENAI_INPUT_COST_PER_MILLION_USD: ${OPENAI_INPUT_COST_PER_MILLION_USD:-0.20}
+      OPENAI_OUTPUT_COST_PER_MILLION_USD: ${OPENAI_OUTPUT_COST_PER_MILLION_USD:-1.20}
+      OPENAI_WEB_SEARCH_COST_PER_CALL_USD: ${OPENAI_WEB_SEARCH_COST_PER_CALL_USD:-0.01}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      EMAIL_DELIVERY_MODE: ${EMAIL_DELIVERY_MODE:-auto}
+      LOG_LEVEL: INFO
+      DISCOVERY_DAILY_QUOTA: ${DISCOVERY_DAILY_QUOTA:-5}
+      DISCOVERY_CACHE_TTL_HOURS: ${DISCOVERY_CACHE_TTL_HOURS:-168}
+      DISCOVERY_RESOLVE_MAX_CANDIDATES: ${DISCOVERY_RESOLVE_MAX_CANDIDATES:-20}
+      DISCOVERY_RESOLVE_MAX_LINK_CANDIDATES: ${DISCOVERY_RESOLVE_MAX_LINK_CANDIDATES:-3}
+      DISCOVERY_RESOLVE_MIN_JOB_LINKS: ${DISCOVERY_RESOLVE_MIN_JOB_LINKS:-3}
+      DISCOVERY_RESOLVE_CONCURRENCY: ${DISCOVERY_RESOLVE_CONCURRENCY:-8}
+      DISCOVERY_RESOLVE_DEADLINE_SECONDS: ${DISCOVERY_RESOLVE_DEADLINE_SECONDS:-120}
+      DEFAULT_POLL_INTERVAL_MINUTES: ${DEFAULT_POLL_INTERVAL_MINUTES:-60}
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready')",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    build:
+      context: ./services/api
+      dockerfile: ../../infra/docker/api.Dockerfile
+    profiles: ["tools"]
+    command: .venv/bin/alembic upgrade head
+    environment: *api-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./services/api
+      dockerfile: ../../infra/docker/api.Dockerfile
+    restart: unless-stopped
+    command: .venv/bin/celery -A app.workers.celery_app worker --loglevel=INFO
+    environment: *api-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  beat:
+    build:
+      context: ./services/api
+      dockerfile: ../../infra/docker/api.Dockerfile
+    restart: unless-stopped
+    command: .venv/bin/celery -A app.workers.celery_app beat --loglevel=INFO
+    environment: *api-environment
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/web.Dockerfile
+    restart: unless-stopped
+    environment:
+      API_INTERNAL_URL: http://api:8000
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+    command: node apps/web/server.js
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  jobscout-postgres:

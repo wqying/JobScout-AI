@@ -1,0 +1,5 @@
+EMPLOYER_NAME,CASE_STATUS,TOTAL_WORKER_POSITIONS,SOC_TITLE
+"Acme Games, Inc.",CERTIFIED,2,Software Developers
+ACME GAMES INC,CERTIFIED-WITHDRAWN,1,Software Developers
+Acme Games LLC,DENIED,1,Data Scientists
+Other Studio Corporation,WITHDRAWN,3,Artists

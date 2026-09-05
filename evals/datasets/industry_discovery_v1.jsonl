@@ -1,0 +1,20 @@
+{"query":"gaming companies","expected_segments":["video games","game development"],"excluded_segments":["gambling"],"reviewed_companies":["Electronic Arts","Epic Games"]}
+{"query":"cybersecurity companies","expected_segments":["endpoint security","cloud security"],"excluded_segments":[],"reviewed_companies":["CrowdStrike","Palo Alto Networks"]}
+{"query":"healthcare software","expected_segments":["health IT","clinical software"],"excluded_segments":["hospitals"],"reviewed_companies":["Epic Systems","Veeva Systems"]}
+{"query":"fintech companies","expected_segments":["payments","financial software"],"excluded_segments":["traditional banks"],"reviewed_companies":["Stripe","Block"]}
+{"query":"robotics companies","expected_segments":["industrial robotics","autonomous systems"],"excluded_segments":[],"reviewed_companies":["Boston Dynamics","Symbotic"]}
+{"query":"developer tools","expected_segments":["software development tools","cloud development"],"excluded_segments":[],"reviewed_companies":["GitHub","HashiCorp"]}
+{"query":"education technology","expected_segments":["learning platforms","education software"],"excluded_segments":[],"reviewed_companies":["Duolingo","Instructure"]}
+{"query":"climate tech","expected_segments":["decarbonization","energy software"],"excluded_segments":[],"reviewed_companies":["Watershed","Form Energy"]}
+{"query":"space technology","expected_segments":["space systems","satellite technology"],"excluded_segments":[],"reviewed_companies":["SpaceX","Planet Labs"]}
+{"query":"ecommerce platforms","expected_segments":["commerce software","marketplaces"],"excluded_segments":[],"reviewed_companies":["Shopify","Etsy"]}
+{"query":"semiconductor companies","expected_segments":["chip design","semiconductor manufacturing"],"excluded_segments":[],"reviewed_companies":["NVIDIA","AMD"]}
+{"query":"data infrastructure","expected_segments":["databases","data platforms"],"excluded_segments":[],"reviewed_companies":["Snowflake","Databricks"]}
+{"query":"AI research companies","expected_segments":["artificial intelligence","machine learning research"],"excluded_segments":[],"reviewed_companies":["Anthropic","OpenAI"]}
+{"query":"digital media companies","expected_segments":["online media","streaming"],"excluded_segments":[],"reviewed_companies":["Netflix","Spotify"]}
+{"query":"logistics technology","expected_segments":["supply chain software","delivery technology"],"excluded_segments":[],"reviewed_companies":["Flexport","Samsara"]}
+{"query":"insurance technology","expected_segments":["insurance software","digital insurance"],"excluded_segments":["traditional insurers"],"reviewed_companies":["Lemonade","Guidewire"]}
+{"query":"real estate software","expected_segments":["property technology","real estate platforms"],"excluded_segments":[],"reviewed_companies":["Zillow","AppFolio"]}
+{"query":"collaboration software","expected_segments":["workplace collaboration","productivity software"],"excluded_segments":[],"reviewed_companies":["Slack","Notion"]}
+{"query":"biotechnology software","expected_segments":["computational biology","life sciences software"],"excluded_segments":["pure drug manufacturing"],"reviewed_companies":["Benchling","Recursion"]}
+{"query":"travel technology","expected_segments":["travel platforms","hospitality software"],"excluded_segments":[],"reviewed_companies":["Airbnb","Sabre"]}
