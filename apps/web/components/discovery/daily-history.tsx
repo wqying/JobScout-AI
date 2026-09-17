@@ -156,10 +156,7 @@ export function DailyDiscoveryHistory() {
       }
       const delay = Math.max(
         50,
-        Math.min(
-          millisecondsUntilNextLocalDay() + 50,
-          CLOCK_CHECK_MAX_MS,
-        ),
+        Math.min(millisecondsUntilNextLocalDay() + 50, CLOCK_CHECK_MAX_MS),
       );
       timer = window.setTimeout(checkClockAndSchedule, delay);
     }
@@ -202,14 +199,20 @@ export function DailyDiscoveryHistory() {
       </div>
 
       {loading && items.length === 0 ? (
-        <p className="flex items-center gap-2 text-sm text-slate-400" role="status">
+        <p
+          className="flex items-center gap-2 text-sm text-slate-400"
+          role="status"
+        >
           <LoaderCircle aria-hidden="true" className="animate-spin" size={16} />
           Loading today&apos;s searches…
         </p>
       ) : null}
 
       {error ? (
-        <div className="notice-error flex flex-wrap items-center justify-between gap-3" role="alert">
+        <div
+          className="notice-error flex flex-wrap items-center justify-between gap-3"
+          role="alert"
+        >
           <span>{error}</span>
           <button
             className="font-semibold underline underline-offset-4"
@@ -275,7 +278,9 @@ export function DailyDiscoveryHistory() {
               onClick={() => void loadEarlier()}
               type="button"
             >
-              {loadingEarlier ? "Loading earlier searches…" : "Load earlier today"}
+              {loadingEarlier
+                ? "Loading earlier searches…"
+                : "Load earlier today"}
             </button>
           ) : null}
         </div>

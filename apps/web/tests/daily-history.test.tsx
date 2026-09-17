@@ -8,10 +8,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DailyDiscoveryHistory } from "@/components/discovery/daily-history";
-import {
-  LOCAL_DAY_END_HEADER,
-  LOCAL_DAY_START_HEADER,
-} from "@/lib/local-day";
+import { LOCAL_DAY_END_HEADER, LOCAL_DAY_START_HEADER } from "@/lib/local-day";
 
 type HistoryItem = {
   id: string;
@@ -90,9 +87,7 @@ describe("Daily history", () => {
       )
       .mockResolvedValueOnce(
         jsonResponse({
-          items: [
-            item({ id: "run-older", query: "healthcare companies" }),
-          ],
+          items: [item({ id: "run-older", query: "healthcare companies" })],
           next_cursor: null,
         }),
       );
@@ -115,7 +110,10 @@ describe("Daily history", () => {
   });
 
   it("explains when no industries have been searched today", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => historyResponse([])));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => historyResponse([])),
+    );
 
     render(<DailyDiscoveryHistory />);
 
@@ -129,7 +127,9 @@ describe("Daily history", () => {
       .fn()
       .mockResolvedValueOnce(
         jsonResponse(
-          { error: { code: "DATABASE_ERROR", message: "History unavailable." } },
+          {
+            error: { code: "DATABASE_ERROR", message: "History unavailable." },
+          },
           503,
         ),
       )
