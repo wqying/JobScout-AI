@@ -6,7 +6,7 @@ export default function DiscoveryRunPage() {
     <AppShell>
       <section className="pt-14">
         <p className="eyebrow">Research results</p>
-        <h1 className="page-title">Review sourced employer recommendations.</h1>
+        <h1 className="page-title">Review company suggestions.</h1>
         <DiscoveryResults />
       </section>
     </AppShell>

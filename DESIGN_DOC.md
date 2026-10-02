@@ -59,7 +59,7 @@ JobScout AI is a private company-discovery and job-monitoring system for one int
 
 It does two things:
 
-1. **Company discovery:** The user enters an industry such as `gaming companies`. JobScout researches and ranks up to 20 relevant US employers, locates their official careers pages, and presents sourced evidence about historical H-1B activity and internships.
+1. **Company discovery:** The user enters an industry such as `gaming companies`. JobScout presents up to 40 structurally valid AI company suggestions in alphabetical order, resolves usable careers sources, and shows factual historical H-1B and research-reported internship signals.
 2. **Job observation:** The user saves recommended companies or manually adds companies. JobScout
    automatically monitors documented providers and permitted public sources, accepts an
    owner-uploaded employer-alert email, or schedules a local review reminder when automation is
@@ -82,8 +82,9 @@ The local owner can:
 
 1. Start the full application with documented local commands.
 2. Configure one local profile and job-alert preferences.
-3. Search for an industry and receive a cited list of up to 20 real US employers.
-4. See each employer's official careers URL, monitoring support, historical H-1B/LCA evidence, and internship evidence.
+3. Search for an industry and receive up to 40 AI-researched US company suggestions.
+4. See each company's usable AI-provided website, accepted careers URL, monitoring support,
+   exact-name DOL filing facts, and whether AI research reported an internship program.
 5. Reopen searches from the current machine-local day's **Daily history** and save companies that
    were missed the first time.
 6. Save selected companies, save all monitorable results, reversibly hide unwanted results, or manually add a company.
@@ -129,15 +130,15 @@ These are engineering targets, not expected personal usage.
 
 ## 2. Product semantics and honesty requirements
 
-### 2.1 “Top 20”
+### 2.1 Broad discovery results
 
-`Top 20` means the highest-ranked evaluation subset found during a bounded research run. It is not
-an exhaustive census or a display cap: when a run persists additional verified candidates, the
-result page renders those candidates too.
+An uncached research run may persist up to 40 structurally valid, deduplicated company suggestions.
+The list is broad rather than ranked and is ordered case-insensitively by company name, then UUID.
+Manifest matching is diagnostic; it never decides whether a company is included.
 
 The UI must state:
 
-> Ranked recommendations based on available public evidence. Results are not exhaustive, and sponsorship history does not guarantee sponsorship for a specific role.
+> AI suggestions may be incomplete or wrong. Save and confirm a company before treating it as verified in this installation. Sponsorship history does not guarantee sponsorship for a specific role.
 
 ### 2.2 Sponsorship evidence
 
@@ -320,7 +321,7 @@ JobScout-AI/
 │       │   ├── companies/
 │       │   ├── core/
 │       │   ├── db/
-│       │   ├── discovery/          # service, scoring, validation, failures
+│       │   ├── discovery/          # service, validation, careers resolver, failures
 │       │   ├── immigration/
 │       │   ├── jobs/
 │       │   ├── assisted_sources/       # source repair, .eml imports, review reminders
@@ -553,7 +554,6 @@ alias TEXT NOT NULL
 normalized_alias TEXT NOT NULL
 alias_type TEXT NOT NULL CHECK brand|former_name|subsidiary|abbreviation
 source_url TEXT NULL
-confidence NUMERIC(4,3) NOT NULL CHECK 0<=confidence<=1
 created_at TIMESTAMPTZ NOT NULL
 UNIQUE(company_id,normalized_alias)
 ```
@@ -566,14 +566,13 @@ company_id UUID FK NOT NULL
 legal_name TEXT NOT NULL
 normalized_legal_name TEXT NOT NULL
 match_method TEXT NOT NULL CHECK exact|ai_proposed|owner_verified
-confidence NUMERIC(4,3) NOT NULL CHECK 0<=confidence<=1
 evidence_url TEXT NULL
 verified_at TIMESTAMPTZ NULL
 created_at TIMESTAMPTZ NOT NULL
 UNIQUE(company_id,normalized_legal_name)
 ```
 
-Only exact mappings with confidence >= 0.95 or owner-verified mappings contribute to visible sponsorship totals.
+Only `exact` and `owner_verified` mappings contribute to visible sponsorship totals.
 
 #### `company_industries`
 
@@ -581,7 +580,6 @@ Only exact mappings with confidence >= 0.95 or owner-verified mappings contribut
 company_id UUID FK NOT NULL
 industry_slug TEXT NOT NULL
 industry_label TEXT NOT NULL
-relevance_score SMALLINT NOT NULL CHECK 0<=relevance_score<=100
 evidence_json JSONB NOT NULL
 created_at TIMESTAMPTZ NOT NULL
 PRIMARY KEY(company_id,industry_slug)
@@ -602,7 +600,6 @@ source_domain TEXT NOT NULL
 is_official_source BOOLEAN NOT NULL
 observed_at TIMESTAMPTZ NOT NULL
 content_hash CHAR(64) NULL
-confidence NUMERIC(4,3) NOT NULL CHECK 0<=confidence<=1
 ```
 
 Exact quotes must be verified as substrings of fetched normalized text. Search snippets may be stored as leads but not displayed as verified quotes.
@@ -613,18 +610,12 @@ Exact quotes must be verified as substrings of fetched normalized text. Search s
 id UUID PK
 discovery_run_id UUID FK NOT NULL
 company_id UUID FK NOT NULL
-rank SMALLINT NOT NULL
-opportunity_score SMALLINT NOT NULL CHECK 0<=opportunity_score<=100
-industry_score SMALLINT NOT NULL
-sponsorship_score SMALLINT NOT NULL
-internship_score SMALLINT NOT NULL
-monitorability_score SMALLINT NOT NULL
-current_openings_score SMALLINT NOT NULL
+research_source_status TEXT NOT NULL CHECK matched|unmatched
+internship_research_reported BOOLEAN NOT NULL
 explanation TEXT NOT NULL
 is_hidden BOOLEAN NOT NULL DEFAULT false
 created_at TIMESTAMPTZ NOT NULL
 UNIQUE(discovery_run_id,company_id)
-UNIQUE(discovery_run_id,rank)
 ```
 
 #### `saved_companies`
@@ -977,7 +968,8 @@ cursor pagination, with a default limit of 10 and maximum of 25. Opening an item
 persisted result page, where unsaved companies can still be saved. At the next machine-local 12:00am
 the panel switches to the new range without deleting older database rows.
 
-Each initial research run asks for 30–40 candidates and persists up to 40 verified, ranked results.
+Each initial research run asks for 30–40 candidates and persists up to 40 structurally valid,
+deduplicated results.
 `GET /discoveries/{id}/results?offset=0&limit=20` returns `total`, `has_more`, `offset`, and `limit`
 with the items. The web result page follows those local-data pages automatically and renders the
 complete persisted discovery series. It has no owner-operated **Show more results** or **Show all
@@ -1003,11 +995,10 @@ same per-request output-token and web-search-call bounds. Do not introduce a sep
 quota or payment state.
 
 A continuation receives the canonical names and available official domains already present in its discovery
-series as exclusions. The prompt asks for different companies, and deterministic validation drops
-any returned candidate whose official domain already exists in the series. Company identity remains
-globally deduplicated by a non-null `companies.official_domain` for researched companies and by
-canonical career-source identity for manually added companies; no cross-series recommendation
-deduplication is required. A continuation returning zero new verified companies succeeds with an empty result set
+series as exclusions. The prompt asks for different companies, and deterministic preparation drops
+any returned candidate whose domain-or-name identity key already exists in the series. Company
+identity uses `domain:<usable-official-domain>` when available and otherwise
+`name:<normalized-company-name>`. A continuation returning zero new companies succeeds with an empty result set
 rather than failing the original discovery.
 
 ### 9.2 Workflow
@@ -1017,16 +1008,15 @@ rather than failing the original discovery.
 2. Reuse an unexpired matching research result when available
 3. Research 30–40 candidate companies using web search        (AI call 1)
 4. Normalize candidates into typed proposals                  (AI call 2)
-5. Resolve and deduplicate canonical identities
-6. Resolve the model-selected careers source ID against the research manifest and verify company identity; an official website may be retained internally for research validation but is not displayed or requested during manual addition
+5. Sanitize websites, create domain-or-name identity keys, and merge duplicate proposals
+6. Match source IDs against the private research manifest for diagnostic status; never gate inclusion
 7. Classify URL evidence and monitoring support independently
-8. Rank provisionally, then run the bounded careers-page resolver (Section 13.7) over the results
-   that will actually be shown; the resolver fetches the cited page, promotes an embedded structured
-   board, follows at most one hop to a real listing page, and measures current openings
+8. In research order, run the bounded careers-page resolver (Section 13.7) over at most the configured
+   number of generic careers candidates; promote embedded structured boards, follow at most one hop,
+   and count current openings
 9. Match allowed legal entities to loaded LCA aggregates
-10. Evaluate internship evidence
-11. Recalculate the deterministic opportunity score from the resolved monitorability and openings
-12. Persist up to 40 verified results; render all of them by automatically reading bounded API pages
+10. Store whether AI research reported an internship program
+11. Persist up to 40 results and render the series alphabetically through bounded API pages
 ```
 
 There is **no separate industry-interpretation AI call**. The `IndustryInterpretation` object is a
@@ -1036,68 +1026,30 @@ stored interpretation rather than re-deriving it. Exactly two AI calls occur per
 if the normalization repair attempt fires).
 
 Step 8 is the only outbound-HTTP stage in discovery, and it is deliberately bounded. It resolves at
-most `DISCOVERY_RESOLVE_MAX_CANDIDATES` candidates, chosen by provisional rank so that the budget is
-spent on results the owner will actually see; the default binds it to the run's `requested_limit`.
-Candidates outside the budget keep their unresolved classification (`generic_pending`, monitorability
-50) and are not silently presented as verified. Resolution failure is never fatal: a candidate whose
+most `DISCOVERY_RESOLVE_MAX_CANDIDATES` generic candidates in research order. Candidates outside the
+budget keep their `generic_pending` classification and `research_linked` careers status. Resolution
+failure is never fatal: a candidate whose
 page is unreachable falls back to its unresolved classification and the run continues.
 
-Return fewer than 20 when fewer pass verification. Never pad the list. Continuations use the same
-workflow, source verification, scoring, tracing, and cost estimation as initial research.
+Return fewer than 40 when fewer structurally valid unique suggestions remain. Never pad the list.
+Continuations use the same preparation, careers validation, tracing, and cost estimation.
 
-### 9.3 Opportunity score
+### 9.3 Categorical facts and ordering
 
-All components are `0..100`:
+Discovery has no relevance, confidence, component, or opportunity scores. The API returns raw
+`current_openings_count`, factual DOL counts for exact or owner-verified employer-name mappings,
+`research_source_status`, `internship_research_reported`, careers URL state, and monitoring support.
+These states describe different responsibilities and must not be collapsed into one quality signal.
 
-```text
-opportunity_score =
-    0.30 * industry_relevance
-  + 0.30 * historical_sponsorship
-  + 0.20 * internship_evidence
-  + 0.10 * monitorability
-  + 0.10 * current_openings
-```
-
-Tie breakers: sponsorship, internship evidence, monitorability, then company name.
-
-Historical sponsorship bands over the latest three fully loaded fiscal years:
-
-```text
-0 cases       -> 0
-1–4           -> 25
-5–24          -> 50
-25–99         -> 75
-100 or more   -> 100
-```
-
-Without an allowed legal-entity mapping, score 0 and display `UNRESOLVED`, not `NO_SPONSORSHIP`.
-
-- Industry relevance: typed AI proposal with supporting sources
-- Internship evidence: 100 when verified against an own-domain official source; otherwise 0
-- Monitorability: 100 structured provider (Greenhouse/Lever/Ashby/SmartRecruiters); 75 generic page
-  the resolver fetched and confirmed to list real jobs; 50 generic page still pending resolution;
-  0 unsupported, resolved-but-listing-free, or no verified careers source
-- Current openings: 100 when the resolver counted at least `DISCOVERY_RESOLVE_MIN_JOB_LINKS`
-  job-detail links; 50 when it counted one or two; 0 when none were verified. A recognized provider
-  board is not fetched at all, so it is not counted and scores 0 here. That is deliberate: the
-  component reports what was measured, never what was assumed. The +25 monitorability a structured
-  board earns outweighs the 100 openings a verified generic page can earn, so a documented board
-  still ranks above a scraped listing.
-
-A cited page that the resolver fetched but could not turn into a job listing scores `0`
-monitorability and is **not** monitored, even though its URL is still shown as evidence. This is the
-deliberate inversion introduced with Section 13.7: before it, an informational early-careers page
-scored 50 and was polled, and the generic adapter turned its navigation links into fabricated jobs.
-
-Candidates outside the resolver budget keep monitorability 50 and openings 0. Their rank is therefore
-computed from unverified monitorability, which can lift an unresolved candidate above a resolved one;
-`monitoring_support` remains `generic_pending` so that the difference stays visible rather than being
-presented as a verified result.
+The result API orders the complete discovery series by case-insensitive company name and then company
+UUID. A continuation can shift alphabetical pagination, so the web app reloads the series only after
+the continuation finishes. Cached clones copy categorical fields and always start with
+`is_hidden=false`.
 
 ### 9.4 Result actions
 
-- Save one company
-- Save all monitorable results
+- Save and confirm one company
+- Save and confirm all monitorable results
 - Save unsupported company with warning
 - Hide result from this run
 - Restore a hidden result with **Show result**
@@ -1144,12 +1096,13 @@ Use two calls:
    `format: "uri"` hints are stripped before sending because OpenAI Structured Outputs rejects that
    format; `HttpUrl` still validates on the way back.
 
-Each call sends a stable `prompt_cache_key` (`jobscout-company-research-v1`,
-`jobscout-company-normalization-v2`). Token and web-search usage is recorded per call in `ai_runs`,
+Each call sends a stable `prompt_cache_key` (`jobscout-company-research-v2`,
+`jobscout-company-normalization-v3`). Token and web-search usage is recorded per call in `ai_runs`,
 and cost is estimated from `OPENAI_INPUT_COST_PER_MILLION_USD`,
 `OPENAI_OUTPUT_COST_PER_MILLION_USD`, and `OPENAI_WEB_SEARCH_COST_PER_CALL_USD`.
 
-Application code performs URL safety checks, official-domain checks, fetching, evidence validation, scoring, and persistence.
+Application code performs URL safety checks, identity preparation, bounded careers fetching,
+categorical validation, and persistence.
 
 The research instruction must ask for the page that **lists individual openings** — a provider board
 root or an "all open positions" page — and must state that an early-careers, university-recruiting,
@@ -1158,10 +1111,9 @@ openings. This is a nudge on seed quality only. It is not trusted: Section 13.7 
 fetching it, because the model cannot see whether a cited URL lists jobs.
 
 **Budget warning.** The research call's `max_tool_calls` bound is the main lever on result yield. With
-too few web searches the model returns plausible company names it never actually visited, and those
-candidates are then dropped by Section 10.4 validation for lacking manifest-backed evidence. A run
-that returns far fewer results than requested is usually search-budget starvation, not over-strict
-validation. Diagnose it from the `discovery_candidate_rejected` log lines before loosening any rule.
+too few web searches the model may return plausible company names it never actually visited. Those
+companies remain visible with `research_source_status: unmatched`, while careers resolution may have
+no accepted source. Diagnose low source coverage from private AI traces and categorical result state.
 
 ### 10.2 Versioned prompts
 
@@ -1216,13 +1168,11 @@ class CompanyProposal(StrictAIModel):
     canonical_name: str = Field(min_length=2, max_length=160)
     aliases: list[str]
     proposed_legal_entities: list[str]
-    official_website_url: HttpUrl          # required from the model; nullable in the DB
+    official_website_url: str | None
     official_careers_source_id: str | None
-    industry_relevance: int = Field(ge=0, le=100)
     industry_explanation: str = Field(min_length=10, max_length=1200)
-    has_internship_evidence: bool
+    internship_research_reported: bool
     source_references: list[SourceReference]
-    unresolved_questions: list[str]
 
 
 class NormalizedDiscovery(StrictAIModel):
@@ -1233,42 +1183,30 @@ class NormalizedDiscovery(StrictAIModel):
 `supports_claims` uses the free-form labels `industry`, `official_identity`, `careers_page`, and
 `internship`; validation lowercases and trims them before comparison. The nullable careers source
 ID is still a required JSON field: the model must deliberately select one cited source or return
-`null`. URLs and titles remain authoritative fields of the deterministic source manifest and are
-never copied from model output.
+`null`. Manifest URLs and titles remain authoritative for source-ID resolution. The model's website
+is a suggestion and is retained only when it passes the identity-anchor policy below.
 
 The model may propose legal entities but cannot mark them owner-verified.
 
 ### 10.4 Validation
 
-`app/discovery/validation.py::validate_proposal` is the single gate. It raises `ValueError` to reject
-a candidate; the workflow logs `discovery_candidate_rejected` and continues, so one bad proposal never
-fails a run. At most 40 proposals are considered per run.
+`app/discovery/validation.py::validate_proposal` prepares a neutral `DiscoveryCandidate`. Manifest
+matching produces only `research_source_status`; an unmatched source does not reject a company.
+The workflow catches `AppError` and `ValueError` per proposal so one malformed item never fails a run.
+All normalized proposals are prepared and deduplicated before the 40-result limit is applied.
 
 **Source resolution.** Every source reference must name a run-local manifest ID. Application code
 resolves the ID to the manifest's URL and title; model-authored URLs are not accepted. IDs make
-provenance resilient to harmless URL spelling differences while preserving the hard requirement
-that evidence came from web research. Manifest URLs are still canonicalized by lowercasing scheme
+provenance resilient to harmless URL spelling differences. Manifest URLs are still canonicalized by lowercasing scheme
 and host, dropping the default port, stripping a trailing slash and fragment, and removing tracking
 parameters (`utm_*`, `gclid`, `fbclid`, `msclkid`, `mc_cid`, `mc_eid`, `igshid`).
 
-**Identity anchor (hard requirement).** The proposal must have at least one manifest-backed source
-whose host equals the official domain or is a subdomain of it. This is what rejects hallucinated
-companies and citations that actually belong to a different company. Never relax this.
-
-**Industry evidence (preference order).** The first available is used:
-
-1. an own-domain source typed `official_company` and tagged `industry`;
-2. any manifest-backed source typed `reputable_directory` or `official_government` tagged `industry`;
-3. otherwise, any own-domain manifest-backed source.
-
-Fallback 3 exists because searches usually land on careers pages that the model tags
-`careers_page`/`internship` rather than `industry`; requiring an explicitly `industry`-tagged citation
-made the gate unsatisfiable in practice. Identity is still proven by the domain, and the model's
-`industry_relevance` supplies the judgment. `search_lead` never establishes industry evidence.
-
-`industry_source_is_official` is true only when the chosen source is both `official_company` and
-own-domain; it is written straight through to `company_evidence.is_official_source`, so a
-directory-sourced claim is never persisted as first-party.
+**Website identity anchor.** A model website is usable only when it is HTTPS, has a normal DNS-style
+hostname, is not localhost, an IP literal, or an internal/reserved suffix, and is not a shared
+profile, directory, social-media, or supported ATS host. The shared-host policy includes supported
+ATS domains plus LinkedIn, Crunchbase, GitHub, Facebook, Instagram, X/Twitter, YouTube, Wikipedia,
+Glassdoor, Indeed, Wellfound, and Built In. An unsuitable website becomes `null`; the company remains
+discoverable and uses its normalized name for identity.
 
 **Careers URL and monitoring are separate decisions.** The model selects one source ID that must
 also appear in that proposal's references and be tagged `careers_page`. The deterministic resolver:
@@ -1280,7 +1218,7 @@ also appear in that proposal's references and be tagged `careers_page`. The dete
    classifies it `structured`;
 3. rejects a non-ATS URL on an unrelated domain.
 
-The result exposes `careers_url_status` (`evidence_verified`, `not_found`, or `rejected`) separately
+The result exposes `careers_url_status` (`research_linked`, `page_checked`, `not_found`, or `rejected`) separately
 from `monitoring_support` (`structured`, `generic_verified`, `generic_pending`, or `unsupported`). It
 also stores a stable `careers_url_reason` such as `CAREERS_SOURCE_NOT_SELECTED`,
 `CAREERS_SOURCE_NOT_IN_MANIFEST`, or `CAREERS_SOURCE_DOMAIN_MISMATCH`. Thus a useful cited careers
@@ -1293,12 +1231,14 @@ selection alone, so `generic_pending` here means exactly "cited on the right dom
 Section 13.7 is what turns that into `generic_verified` or `unsupported`; the two stages are kept
 apart so that validation stays a pure, fully unit-testable function.
 
-**Internship evidence.** Requires an own-domain manifest-backed `official_company` source tagged
-`internship`.
+**Internship reporting.** `internship_research_reported` records the model's research output as a
+claim, not independently verified evidence.
 
-**Deduplication.** Within a run, candidates sharing an official domain collapse to the one with the
-highest `industry_relevance`. Continuation runs additionally drop any domain already present in the
-series.
+**Deduplication.** Use `domain:<official-domain>` when a usable domain exists and otherwise
+`name:<normalized-company-name>`. Merge duplicates in research order: keep the first name,
+explanation, and identity; union aliases, proposed legal entities, and references; keep the first
+resolvable careers reference; and OR the internship-report flag. Continuations drop an identity key
+already present in the series.
 
 One malformed structured response gets at most one repair attempt, which re-sends the same report with
 the validation error appended as feedback; usage from both attempts is summed into one trace with
@@ -1584,11 +1524,11 @@ Tests must cover bypass attempts.
 
 `app/discovery/careers_resolver.py` is the bounded fetch stage referenced by Section 9.2 step 8. It
 exists because "web search cited this URL" is not evidence that the URL lists jobs, and the model
-cannot check: it never opened the page either. Without this stage the highest-ranked evidence for a
+cannot check: it never opened the page either. Without this stage the selected evidence for a
 company is routinely an early-careers or university-recruiting landing page, which is informational.
 
-The resolver runs after validation and deduplication, over candidates chosen by **provisional rank**
-so the fetch budget is spent on results the owner will actually see. It reuses `SafeHttpClient`, so
+The resolver runs after validation and deduplication, over generic candidates in research order. It
+reuses `SafeHttpClient`, so
 SSRF validation (13.6), the HTTPS-after-redirects rule, robots.txt policy (13.3), per-domain rate
 limiting, and the 5 MB response bound all apply unchanged. It performs no writes.
 
@@ -1600,11 +1540,11 @@ Per candidate:
    disallow ends resolution for that candidate rather than the run.
 3. **Sniff for an embedded board.** `detect_provider(url, html)` is called *with* HTML, which the
    discovery path previously never did. A page that embeds or links a Greenhouse, Lever, Ashby, or
-   SmartRecruiters board is promoted to `structured` at its board root, monitorability 100. This is
+   SmartRecruiters board is promoted to `structured` at its board root and marked `page_checked`. This is
    the single highest-yield step, because most hand-built early-careers pages funnel into an ATS.
 4. **Count job-detail links** with the Section 13.3 rules. At least
-   `DISCOVERY_RESOLVE_MIN_JOB_LINKS` makes the page a confirmed listing (`generic_verified`,
-   monitorability 75). One or two makes it a weak listing: kept, but hops are still attempted in case
+   `DISCOVERY_RESOLVE_MIN_JOB_LINKS` makes the page a confirmed listing (`generic_verified`). One or
+   two makes it a weak listing: kept, but hops are still attempted in case
    a fuller page exists.
 5. **Follow at most one hop.** When the page is not a confirmed listing, its anchors are scored as
    *listing candidates* — by anchor phrase (`view all jobs`, `open positions`, `search jobs`, `all
@@ -1612,20 +1552,19 @@ Per candidate:
    `DISCOVERY_RESOLVE_MAX_LINK_CANDIDATES` are fetched. Each is re-evaluated by steps 3 and 4. **No
    hop follows a hop.** The best outcome across the seed and its hops wins.
 6. **Otherwise mark it unsupported.** A page that was fetched successfully and yielded no listing
-   anywhere keeps its URL as displayed evidence (`careers_url_status` stays `evidence_verified`) but
-   drops to `monitoring_support: unsupported`, monitorability 0, and is never saved as a pollable
-   source. This is the inversion described in Section 9.3.
+   anywhere keeps its URL (`careers_url_status: page_checked`) but drops to
+   `monitoring_support: unsupported` and is never saved as a pollable source.
 
 Every candidate is independent and every failure is contained. A fetch error, robots disallow, SSRF
-rejection, or deadline expiry falls back to the unresolved classification (`generic_pending`,
-monitorability 50) — the same value the candidate would have had before this section existed — and is
+rejection, or deadline expiry falls back to `research_linked` and `generic_pending` — the same
+classification the candidate had before this stage — and is
 logged. Adding 40 third-party hosts to a workflow that previously depended only on OpenAI must not
 make a discovery run fail because one company's website is down.
 
 Bounds, all from `Settings`:
 
 ```text
-DISCOVERY_RESOLVE_MAX_CANDIDATES       how many ranked candidates may be resolved (0 disables)
+DISCOVERY_RESOLVE_MAX_CANDIDATES       how many research-order candidates may be resolved (0 disables)
 DISCOVERY_RESOLVE_MAX_LINK_CANDIDATES  hop targets per candidate
 DISCOVERY_RESOLVE_MIN_JOB_LINKS        job links required to call a page a confirmed listing
 DISCOVERY_RESOLVE_CONCURRENCY          candidates resolved in parallel
@@ -2039,7 +1978,7 @@ source repair requires a new direct structured-provider URL.
 /                         Local landing/status page
 /onboarding               Profile and alert preferences
 /discover                 Industry search
-/discover/[runId]         Async progress and ranked results
+/discover/[runId]         Async progress and alphabetical results
 /companies                Saved companies
 /companies/[companyId]    Evidence, source health, jobs, settings
 /jobs                     Jobs across saved companies
@@ -2069,22 +2008,21 @@ view only; it never deletes discovery runs or their results.
 
 ### 18.3 Discovery result card
 
-Show rank, opportunity score and components, industry explanation, the careers-page link, LCA band
-and loaded years, internship evidence, monitoring provider/status, evidence sources/dates, and
-Save/Hide/details actions. Do not show an official-website link.
-
-Never show a score without its component breakdown.
+Show the company name, matched/unmatched research status, optional AI-provided website, accepted
+careers-page link, raw current-opening count, name-matched DOL filing facts, AI-reported internship
+state, careers inspection state, monitoring support, and Save and confirm/Hide actions. Do not expose
+the general research-source manifest through the discovery API or UI.
 
 Display every persisted result in a discovery series by automatically following the bounded results
 API pages. Do not render an owner-operated **Show more results** or **Show all search results**
 control. Keep **Research more** visible on a successful run. Directly below it, state that additional
 OpenAI tokens and web-search calls may be charged to the owner's API key. Clicking the button queues
 the request without a modal or browser confirmation. While a continuation is queued or
-running, disable duplicate continuation submissions and show asynchronous progress. Append new
-verified results to the same discovery series. If no new verified companies remain, show an honest
+running, disable duplicate continuation submissions and show asynchronous progress. Reload new
+alphabetically ordered results into the same discovery series. If no new companies remain, show an honest
 empty-continuation message and keep all prior results.
 
-After **Hide result**, keep a compact placeholder in rank order with the company name and a
+After **Hide result**, keep a compact alphabetical placeholder with the company name and a
 **Show result** button. Clicking it restores the full card without rerunning research.
 
 ### 18.4 Saved companies
@@ -2219,7 +2157,7 @@ Run with `uv run pytest` from `services/api`. Integration tests are skipped unle
 #### Unit
 
 - query/employer normalization
-- opportunity scoring and ties
+- website identity safety, source-match state, and first-plus-merge deduplication
 - provider detection, including embedded-board detection from fetched HTML
 - job-link extraction rules (`test_job_links.py`): navigation, index segments, and section links are
   rejected while slug-only and ATS job URLs survive; `Search Engineer` is kept and `Search jobs` is not
@@ -2374,21 +2312,21 @@ Acceptance:
 ### Milestone 3 — AI industry discovery
 
 Deliver prompts/schemas, Responses client, two-call workflow, fake AI, machine-local daily
-history/cache/quota, evidence verification, scoring, async UI, traces, initial evals, persisted
+history/cache/quota, categorical careers validation, async UI, traces, initial evals, persisted
 candidate pools, and acknowledged research continuations.
 
 Acceptance:
 
-- gaming fixture returns ordered cited results;
+- gaming fixture returns alphabetical broad results;
 - live mode needs API key;
 - repeated query uses cache;
 - Daily history beneath the search bar reopens every root search from the current machine-local day,
   includes cache hits and all run statuses, and rolls over at local 12:00am without deleting history;
 - discovery quota resets at the same local-midnight boundary, failed uncached runs count, and cached
   hits do not;
-- invalid candidate does not fail valid ones;
-- no unsourced material claim reaches UI;
-- scores reproduce deterministically;
+- an unmatched manifest source does not remove a structurally valid company;
+- malformed and shared-host websites become null without failing valid candidates;
+- categorical careers, internship, research, and DOL states remain distinct;
 - the result page automatically renders the complete persisted series without a Show more control
   or AI call;
 - Research more shows an inline owner-key API-usage warning, uses no confirmation dialog, runs asynchronously without an app payment gate, and cannot duplicate an official domain within its discovery series.

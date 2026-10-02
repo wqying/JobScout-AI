@@ -25,11 +25,10 @@ def _proposal(
             "canonical_name": "Acme",
             "aliases": [],
             "proposed_legal_entities": [],
-            "official_website_url": "https://acme.example",
+            "official_website_url": "https://acme.com",
             "official_careers_source_id": careers_source_id,
-            "industry_relevance": 90,
             "industry_explanation": "Acme builds verified test products.",
-            "has_internship_evidence": False,
+            "internship_research_reported": False,
             "source_references": [
                 {
                     "source_id": "source_1",
@@ -42,7 +41,6 @@ def _proposal(
                     "supports_claims": careers_claims or ["careers_page"],
                 },
             ],
-            "unresolved_questions": [],
         }
     )
 
@@ -52,11 +50,11 @@ def test_source_ids_resolve_manifest_evidence_and_canonicalize_structured_boards
 
     valid = validate_proposal(discovery.companies[0], _manifest())
 
-    assert valid.official_domain == "acme-games.example"
+    assert valid.official_domain == "acme-games.com"
     assert valid.careers.url == "https://jobs.lever.co/acme-games"
-    assert valid.careers.url_status == "evidence_verified"
+    assert valid.careers.url_status == "research_linked"
     assert valid.careers.monitoring_support == "structured"
-    assert valid.monitorability_score == 100
+    assert valid.research_source_status == "matched"
     assert valid.careers.source_id == "source_3"
 
 
@@ -64,7 +62,7 @@ def test_smartrecruiters_manifest_source_is_structured_and_canonicalized() -> No
     manifest = [
         {
             "source_id": "source_1",
-            "url": "https://acme.example/about",
+            "url": "https://acme.com/about",
             "title": "About",
         },
         {
@@ -77,46 +75,46 @@ def test_smartrecruiters_manifest_source_is_structured_and_canonicalized() -> No
     valid = validate_proposal(_proposal(), manifest)
 
     assert valid.careers.url == "https://careers.smartrecruiters.com/AcmeGames"
-    assert valid.careers.url_status == "evidence_verified"
+    assert valid.careers.url_status == "research_linked"
     assert valid.careers.monitoring_support == "structured"
-    assert valid.monitorability_score == 100
 
 
-def test_invalid_candidate_does_not_pass_official_domain_validation() -> None:
+def test_unmatched_manifest_source_does_not_remove_company() -> None:
     discovery = NormalizedDiscovery.model_validate_json(DISCOVERY_FIXTURE.read_text())
 
-    with pytest.raises(ValueError, match=r"official.*industry evidence"):
-        validate_proposal(discovery.companies[2], _manifest())
+    candidate = validate_proposal(discovery.companies[2], _manifest())
+
+    assert candidate.proposal.canonical_name == "Unsourced Studio"
+    assert candidate.research_source_status == "unmatched"
 
 
 def test_official_domain_careers_source_is_verified_but_generic_monitoring_is_pending() -> None:
     manifest = [
         {
             "source_id": "source_1",
-            "url": "https://acme.example/about",
+            "url": "https://acme.com/about",
             "title": "About",
         },
         {
             "source_id": "source_2",
-            "url": "https://acme.example/careers/?utm_source=openai#jobs",
+            "url": "https://acme.com/careers/?utm_source=openai#jobs",
             "title": "Careers",
         },
     ]
 
     valid = validate_proposal(_proposal(), manifest)
 
-    assert valid.careers.url == "https://acme.example/careers"
-    assert valid.careers.url_status == "evidence_verified"
+    assert valid.careers.url == "https://acme.com/careers"
+    assert valid.careers.url_status == "research_linked"
     assert valid.careers.reason == "CAREERS_SOURCE_OFFICIAL_DOMAIN_VERIFIED"
     assert valid.careers.monitoring_support == "generic_pending"
-    assert valid.monitorability_score == 50
 
 
 def test_missing_manifest_source_is_rejected_with_reason_without_dropping_company() -> None:
     manifest = [
         {
             "source_id": "source_1",
-            "url": "https://acme.example/about",
+            "url": "https://acme.com/about",
             "title": "About",
         }
     ]
@@ -133,17 +131,17 @@ def test_canonical_duplicate_manifest_urls_keep_each_source_id_resolvable() -> N
     manifest = [
         {
             "source_id": "source_1",
-            "url": "https://acme.example/about",
+            "url": "https://acme.com/about",
             "title": "About",
         },
         {
             "source_id": "source_2",
-            "url": "https://acme.example/careers?utm_source=openai",
+            "url": "https://acme.com/careers?utm_source=openai",
             "title": "Careers from annotation",
         },
         {
             "source_id": "source_3",
-            "url": "https://acme.example/careers",
+            "url": "https://acme.com/careers",
             "title": "Careers from search action",
         },
     ]
@@ -152,7 +150,7 @@ def test_canonical_duplicate_manifest_urls_keep_each_source_id_resolvable() -> N
 
     valid = validate_proposal(proposal, manifest)
 
-    assert valid.careers.url == "https://acme.example/careers"
+    assert valid.careers.url == "https://acme.com/careers"
     assert valid.careers.source_id == "source_3"
 
 
@@ -160,12 +158,12 @@ def test_malformed_manifest_url_is_ignored_instead_of_failing_the_run() -> None:
     manifest = [
         {
             "source_id": "source_1",
-            "url": "https://acme.example/about",
+            "url": "https://acme.com/about",
             "title": "About",
         },
         {
             "source_id": "source_2",
-            "url": "https://acme.example:invalid/careers",
+            "url": "https://acme.com:invalid/careers",
             "title": "Malformed",
         },
     ]
@@ -180,12 +178,12 @@ def test_untagged_source_cannot_be_used_as_careers_evidence() -> None:
     manifest = [
         {
             "source_id": "source_1",
-            "url": "https://acme.example/about",
+            "url": "https://acme.com/about",
             "title": "About",
         },
         {
             "source_id": "source_2",
-            "url": "https://acme.example/careers",
+            "url": "https://acme.com/careers",
             "title": "Careers",
         },
     ]
@@ -200,12 +198,12 @@ def test_unrelated_non_ats_domain_cannot_be_used_as_careers_evidence() -> None:
     manifest = [
         {
             "source_id": "source_1",
-            "url": "https://acme.example/about",
+            "url": "https://acme.com/about",
             "title": "About",
         },
         {
             "source_id": "source_2",
-            "url": "https://unrelated.example/careers",
+            "url": "https://unrelated.com/careers",
             "title": "Wrong careers",
         },
     ]
@@ -220,7 +218,7 @@ def test_no_selected_source_is_an_explicit_not_found_state() -> None:
     manifest = [
         {
             "source_id": "source_1",
-            "url": "https://acme.example/about",
+            "url": "https://acme.com/about",
             "title": "About",
         }
     ]
@@ -237,3 +235,32 @@ def test_fixture_is_strict_json_schema_compatible() -> None:
 
     assert discovery.interpretation.slug == "gaming-companies"
     assert discovery.companies[0].official_careers_source_id == "source_3"
+
+
+@pytest.mark.parametrize(
+    "website",
+    [
+        "http://acme.com",
+        "https://localhost",
+        "https://127.0.0.1",
+        "https://internal.corp",
+        "https://acme.example",
+        "https://acme.test",
+        "https://[not-an-ipv6-address]/careers",
+        "https://acme.com:invalid/careers",
+        "https://linkedin.com/company/acme",
+        "https://github.com/acme",
+        "https://boards.greenhouse.io/acme",
+        "https://greenhouse.io/acme",
+    ],
+)
+def test_unsuitable_website_is_removed_without_dropping_company(website: str) -> None:
+    candidate = validate_proposal(
+        _proposal().model_copy(update={"official_website_url": website}),
+        [],
+    )
+
+    assert candidate.website_url is None
+    assert candidate.official_domain is None
+    assert candidate.identity_key == "name:acme"
+    assert candidate.research_source_status == "unmatched"

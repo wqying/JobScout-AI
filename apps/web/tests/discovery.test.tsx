@@ -26,6 +26,29 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+function makeResult(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "result-1",
+    company_id: "company-1",
+    company_name: "Acme Games",
+    official_website_url: "https://acme.example",
+    careers_url: "https://jobs.lever.co/acme",
+    research_source_status: "matched",
+    internship_research_reported: true,
+    current_openings_count: 3,
+    explanation: "Acme develops video games.",
+    historical_h1b_status: "historical_records",
+    certified_h1b_cases: 2,
+    loaded_fiscal_years: [2025],
+    careers_url_status: "research_linked",
+    careers_url_reason: "CAREERS_SOURCE_STRUCTURED_VERIFIED",
+    monitoring_support: "structured",
+    is_hidden: false,
+    is_saved: false,
+    ...overrides,
+  };
+}
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -65,41 +88,8 @@ describe("company discovery", () => {
     );
   });
 
-  it("shows cached cost, sourced scores, and plain-language careers support", async () => {
-    const result = {
-      id: "result-1",
-      company_id: "company-1",
-      rank: 1,
-      company_name: "Acme Games",
-      careers_url: "https://jobs.lever.co/acme",
-      opportunity_score: 65,
-      scores: {
-        industry: 90,
-        historical_h1b_sponsorship: 25,
-        internship: 100,
-        careers_page_support: 100,
-        current_openings: 0,
-      },
-      explanation: "Acme develops video games.",
-      historical_h1b_status: "historical_records",
-      certified_h1b_cases: 2,
-      loaded_fiscal_years: [2025],
-      internship_evidence: true,
-      careers_url_status: "evidence_verified",
-      careers_url_reason: "CAREERS_SOURCE_STRUCTURED_VERIFIED",
-      monitoring_support: "structured",
-      sources: [
-        {
-          source_id: "source_1",
-          url: "https://acme.example/about",
-          title: "About Acme",
-          source_type: "official_company",
-          supports_claims: ["industry"],
-        },
-      ],
-      is_hidden: false,
-      is_saved: false,
-    };
+  it("shows scoreless research state and precise careers support", async () => {
+    const result = makeResult();
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
       if (path.endsWith("/discoveries/run-1")) {
@@ -136,42 +126,27 @@ describe("company discovery", () => {
       screen.getByText(/after you save this company, JobScout can check/i),
     ).toBeInTheDocument();
     expect(screen.getByText(/certified H1-B filings/i)).toBeInTheDocument();
-    expect(screen.getByText("About Acme")).toBeInTheDocument();
-    expect(screen.queryByText(/official website/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Research source matched")).toBeInTheDocument();
+    expect(screen.getByText("AI-provided website")).toBeInTheDocument();
+    expect(
+      screen.getByText(/AI research reported an internship/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/opportunity score/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/rank #/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/work authorization/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/monitoring provider/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/legal employer/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/\bLCA\b/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: "Save and confirm companies with monitorable careers sources",
+      }),
+    ).toBeEnabled();
   });
 
   it("saves a discovered company and reloads its saved state", async () => {
     let saved = false;
-    const result = {
-      id: "result-1",
-      company_id: "company-1",
-      rank: 1,
-      company_name: "Acme Games",
-      careers_url: "https://jobs.lever.co/acme",
-      opportunity_score: 65,
-      scores: {
-        industry: 90,
-        historical_h1b_sponsorship: 25,
-        internship: 100,
-        careers_page_support: 100,
-        current_openings: 0,
-      },
-      explanation: "Acme develops video games.",
-      historical_h1b_status: "historical_records",
-      certified_h1b_cases: 2,
-      loaded_fiscal_years: [2025],
-      internship_evidence: true,
-      careers_url_status: "evidence_verified",
-      careers_url_reason: "CAREERS_SOURCE_STRUCTURED_VERIFIED",
-      monitoring_support: "structured",
-      sources: [],
-      is_hidden: false,
-      is_saved: false,
-    };
+    const result = makeResult();
     const fetchMock = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit) => {
         const path = String(input);
@@ -210,45 +185,33 @@ describe("company discovery", () => {
 
     render(<DiscoveryResults />);
     fireEvent.click(
-      await screen.findByRole("button", { name: "Save company" }),
+      await screen.findByRole("button", { name: "Save and confirm" }),
     );
 
-    expect(await screen.findByRole("button", { name: "Saved" })).toBeDisabled();
+    expect(
+      await screen.findByRole("button", { name: "Saved and confirmed" }),
+    ).toBeDisabled();
     expect(saved).toBe(true);
   });
 
   it("loads every persisted result page without a show-more control", async () => {
-    const baseResult = {
-      id: "result-1",
-      company_id: "company-1",
-      rank: 1,
-      company_name: "Acme Games",
+    const baseResult = makeResult({
+      official_website_url: null,
       careers_url: null,
-      opportunity_score: 50,
-      scores: {
-        industry: 80,
-        historical_h1b_sponsorship: 50,
-        internship: 50,
-        careers_page_support: 0,
-        current_openings: 0,
-      },
-      explanation: "Acme develops video games.",
+      research_source_status: "unmatched",
+      internship_research_reported: false,
+      current_openings_count: 0,
       historical_h1b_status: "no_records",
       certified_h1b_cases: 0,
       loaded_fiscal_years: [],
-      internship_evidence: false,
       careers_url_status: "not_found",
       careers_url_reason: "CAREERS_SOURCE_NOT_SELECTED",
       monitoring_support: "unsupported",
-      sources: [],
-      is_hidden: false,
-      is_saved: false,
-    };
+    });
     const secondResult = {
       ...baseResult,
       id: "result-2",
       company_id: "company-2",
-      rank: 2,
       company_name: "Pixel Forge",
     };
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -291,6 +254,9 @@ describe("company discovery", () => {
     expect(await screen.findByText("Acme Games")).toBeInTheDocument();
     expect(await screen.findByText("Pixel Forge")).toBeInTheDocument();
     expect(
+      screen.getAllByText("AI suggestion — source not matched").length,
+    ).toBeGreaterThan(0);
+    expect(
       screen.queryByRole("button", { name: "Show all search results" }),
     ).not.toBeInTheDocument();
     expect(
@@ -306,32 +272,18 @@ describe("company discovery", () => {
   it("shows an inline warning and starts research more without a dialog", async () => {
     let continuationFinished = false;
     const confirmMock = vi.spyOn(window, "confirm");
-    const result = {
-      id: "result-1",
-      company_id: "company-1",
-      rank: 1,
-      company_name: "Acme Games",
+    const result = makeResult({
+      official_website_url: null,
       careers_url: null,
-      opportunity_score: 50,
-      scores: {
-        industry: 80,
-        historical_h1b_sponsorship: 50,
-        internship: 50,
-        careers_page_support: 0,
-        current_openings: 0,
-      },
-      explanation: "Acme develops video games.",
+      internship_research_reported: false,
+      current_openings_count: 0,
       historical_h1b_status: "no_records",
       certified_h1b_cases: 0,
       loaded_fiscal_years: [],
-      internship_evidence: false,
       careers_url_status: "not_found",
       careers_url_reason: "CAREERS_SOURCE_NOT_SELECTED",
       monitoring_support: "unsupported",
-      sources: [],
-      is_hidden: false,
-      is_saved: false,
-    };
+    });
     const fetchMock = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit) => {
         const path = String(input);
@@ -384,7 +336,6 @@ describe("company discovery", () => {
                     ...result,
                     id: "result-2",
                     company_id: "company-2",
-                    rank: 2,
                     company_name: "Pixel Forge",
                   },
                 ]
@@ -412,38 +363,13 @@ describe("company discovery", () => {
 
     expect(confirmMock).not.toHaveBeenCalled();
     expect(
-      await screen.findByText(/found 1 additional verified company/i),
+      await screen.findByText(/found 1 additional company/i),
     ).toBeInTheDocument();
   });
 
   it("can restore a hidden result without rerunning research", async () => {
     let hidden = false;
-    const result = {
-      id: "result-1",
-      company_id: "company-1",
-      rank: 1,
-      company_name: "Acme Games",
-      careers_url: "https://jobs.lever.co/acme",
-      opportunity_score: 65,
-      scores: {
-        industry: 90,
-        historical_h1b_sponsorship: 25,
-        internship: 100,
-        careers_page_support: 100,
-        current_openings: 0,
-      },
-      explanation: "Acme develops video games.",
-      historical_h1b_status: "historical_records",
-      certified_h1b_cases: 2,
-      loaded_fiscal_years: [2025],
-      internship_evidence: true,
-      careers_url_status: "evidence_verified",
-      careers_url_reason: "CAREERS_SOURCE_STRUCTURED_VERIFIED",
-      monitoring_support: "structured",
-      sources: [],
-      is_hidden: false,
-      is_saved: false,
-    };
+    const result = makeResult();
     const fetchMock = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit) => {
         const path = String(input);
@@ -494,7 +420,7 @@ describe("company discovery", () => {
       await screen.findByRole("button", { name: "Show result" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Save company" }),
+      screen.queryByRole("button", { name: "Save and confirm" }),
     ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Show result" }));
@@ -506,7 +432,33 @@ describe("company discovery", () => {
       await screen.findByRole("button", { name: "Hide result" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Save company" }),
+      screen.getByRole("button", { name: "Save and confirm" }),
     ).toBeInTheDocument();
   });
+
+  it.each(["NO_DISCOVERY_RESULTS", "NO_VERIFIED_RESULTS"])(
+    "keeps the %s failure code readable",
+    async (errorCode) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          jsonResponse({
+            id: "run-1",
+            query: "gaming companies",
+            status: "failed",
+            cached: false,
+            result_count: 0,
+            error_code: errorCode,
+            estimated_cost_usd: 0.01,
+          }),
+        ),
+      );
+
+      render(<DiscoveryResults />);
+
+      expect(
+        await screen.findByText(new RegExp(errorCode)),
+      ).toBeInTheDocument();
+    },
+  );
 });

@@ -30,6 +30,38 @@ async def test_migration_created_core_tables() -> None:
                 column["name"] for column in inspect(sync_connection).get_columns("career_sources")
             }
         )
+        discovery_result_columns = await connection.run_sync(
+            lambda sync_connection: {
+                column["name"]
+                for column in inspect(sync_connection).get_columns("discovery_results")
+            }
+        )
+        company_industry_columns = await connection.run_sync(
+            lambda sync_connection: {
+                column["name"]
+                for column in inspect(sync_connection).get_columns("company_industries")
+            }
+        )
+        confidence_columns = await connection.run_sync(
+            lambda sync_connection: {
+                table_name: {
+                    column["name"] for column in inspect(sync_connection).get_columns(table_name)
+                }
+                for table_name in (
+                    "company_aliases",
+                    "company_legal_entities",
+                    "company_evidence",
+                )
+            }
+        )
+        discovery_uniques = await connection.run_sync(
+            lambda sync_connection: {
+                constraint["name"]
+                for constraint in inspect(sync_connection).get_unique_constraints(
+                    "discovery_results"
+                )
+            }
+        )
 
     await engine.dispose()
     assert {
@@ -48,3 +80,19 @@ async def test_migration_created_core_tables() -> None:
         "retired_at",
         "replaced_by_source_id",
     } <= career_source_columns
+    assert {
+        "research_source_status",
+        "internship_research_reported",
+    } <= discovery_result_columns
+    assert {
+        "rank",
+        "opportunity_score",
+        "industry_score",
+        "sponsorship_score",
+        "internship_score",
+        "monitorability_score",
+        "current_openings_score",
+    }.isdisjoint(discovery_result_columns)
+    assert "relevance_score" not in company_industry_columns
+    assert all("confidence" not in columns for columns in confidence_columns.values())
+    assert "uq_discovery_results_run_rank" not in discovery_uniques

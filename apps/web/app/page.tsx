@@ -7,7 +7,7 @@ const capabilities = [
   {
     icon: Search,
     title: "Research employers",
-    body: "Discover US companies in an industry with visible, sourced evidence.",
+    body: "Explore AI-researched US companies and confirm the ones you want to follow.",
   },
   {
     icon: Building2,
@@ -44,7 +44,7 @@ export default function Home() {
               Discover companies <ArrowRight aria-hidden="true" size={18} />
             </Link>
             <span className="text-sm text-slate-400">
-              Sourced research with local caching and visible scores
+              Broad AI research with local caching and owner confirmation
             </span>
           </div>
         </div>

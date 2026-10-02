@@ -16,41 +16,30 @@ type Run = {
   estimated_cost_usd: number;
 };
 
-type Source = {
-  source_id: string | null;
-  url: string;
-  title: string | null;
-  source_type: string;
-  supports_claims: string[];
-};
-
 type Result = {
   id: string;
   company_id: string;
-  rank: number;
   company_name: string;
+  official_website_url: string | null;
   careers_url: string | null;
-  opportunity_score: number;
-  scores: {
-    industry: number;
-    historical_h1b_sponsorship: number;
-    internship: number;
-    careers_page_support: number;
-    current_openings: number;
-  };
+  research_source_status: "matched" | "unmatched";
+  internship_research_reported: boolean;
+  current_openings_count: number;
   explanation: string;
   historical_h1b_status: "historical_records" | "no_records" | "unresolved";
   certified_h1b_cases: number;
   loaded_fiscal_years: number[];
-  internship_evidence: boolean;
-  careers_url_status: "evidence_verified" | "not_found" | "rejected";
+  careers_url_status:
+    | "research_linked"
+    | "page_checked"
+    | "not_found"
+    | "rejected";
   careers_url_reason: string;
   monitoring_support:
     | "structured"
     | "generic_verified"
     | "generic_pending"
     | "unsupported";
-  sources: Source[];
   is_hidden: boolean;
   is_saved: boolean;
 };
@@ -158,8 +147,8 @@ export function DiscoveryResults() {
           await load();
           setNotice(
             continuation.result_count > 0
-              ? `Found ${continuation.result_count} additional verified ${continuation.result_count === 1 ? "company" : "companies"}.`
-              : "No additional verified companies were found. Your previous results are unchanged.",
+              ? `Found ${continuation.result_count} additional ${continuation.result_count === 1 ? "company" : "companies"}.`
+              : "No additional companies were found. Your previous results are unchanged.",
           );
         }
       } catch (caught) {
@@ -331,7 +320,7 @@ export function DiscoveryResults() {
             <LoaderCircle className="animate-spin" size={20} />
             {run.status === "queued"
               ? "Waiting for the research worker…"
-              : "Researching and verifying company sources…"}
+              : "Researching company suggestions and careers sources…"}
           </p>
           <p className="mt-3 text-sm leading-6 text-slate-400">
             You can leave this page and return later. The worker records
@@ -349,12 +338,14 @@ export function DiscoveryResults() {
         <>
           <div className="flex flex-wrap items-center justify-between gap-4">
             <p className="text-sm leading-6 text-slate-400">
-              Loaded {results.length} verified recommendation
-              {results.length === 1 ? "" : "s"}: {visible.length} visible
+              Loaded {results.length} company suggestion
+              {results.length === 1 ? "" : "s"} alphabetically: {visible.length}{" "}
+              visible
               {results.length - visible.length > 0
                 ? ` and ${results.length - visible.length} hidden`
                 : ""}
-              . Scores always include their component breakdown.
+              . Save and confirm marks a company verified for this local
+              installation.
             </p>
             <button
               className="button-secondary"
@@ -362,7 +353,9 @@ export function DiscoveryResults() {
               onClick={() => void saveAll()}
               type="button"
             >
-              {working === "all" ? "Saving…" : "Save all with careers sources"}
+              {working === "all"
+                ? "Saving…"
+                : "Save and confirm companies with monitorable careers sources"}
             </button>
           </div>
           {visible.length === 0 ? (
@@ -454,12 +447,20 @@ function ResultCard({
       <div className="flex flex-wrap items-start justify-between gap-5">
         <div>
           <p className="text-sm font-medium text-cyan-300">
-            Rank #{result.rank}
+            {result.research_source_status === "matched"
+              ? "Research source matched"
+              : "AI suggestion — source not matched"}
           </p>
           <h2 className="mt-2 text-2xl font-semibold text-white">
             {result.company_name}
           </h2>
           <div className="mt-3 flex flex-wrap gap-4 text-sm">
+            {result.official_website_url ? (
+              <ExternalLinkText
+                href={result.official_website_url}
+                label="AI-provided website"
+              />
+            ) : null}
             {result.careers_url ? (
               <ExternalLinkText
                 href={result.careers_url}
@@ -470,26 +471,24 @@ function ResultCard({
         </div>
         <div className="rounded-xl border border-cyan-300/20 bg-cyan-300/10 px-5 py-4 text-center">
           <p className="text-3xl font-semibold text-cyan-100">
-            {result.opportunity_score}
+            {result.current_openings_count}
           </p>
           <p className="mt-1 text-xs uppercase tracking-wide text-cyan-200/70">
-            Opportunity score
+            Openings found at discovery
           </p>
         </div>
       </div>
 
       <p className="leading-7 text-slate-300">{result.explanation}</p>
 
-      <ScoreGrid result={result} />
-
       <div className="grid gap-4 md:grid-cols-2">
-        <EvidencePanel title="H1-B sponsorship">
+        <EvidencePanel title="DOL filing facts">
           {h1bText(result)}
         </EvidencePanel>
         <EvidencePanel title="Internships">
-          {result.internship_evidence
-            ? "Official internship evidence found."
-            : "No verified official internship evidence found."}
+          {result.internship_research_reported
+            ? "AI research reported an internship program."
+            : "AI research did not report an internship program."}
         </EvidencePanel>
       </div>
 
@@ -502,25 +501,6 @@ function ResultCard({
         </EvidencePanel>
       </div>
 
-      <details className="rounded-xl border border-white/10 p-4">
-        <summary className="cursor-pointer font-medium text-slate-200">
-          Evidence sources ({result.sources.length})
-        </summary>
-        <ul className="mt-4 grid gap-3 text-sm text-slate-400">
-          {result.sources.map((source) => (
-            <li key={source.url}>
-              <ExternalLinkText
-                href={source.url}
-                label={source.title ?? source.url}
-              />
-              <span className="ml-2 text-slate-500">
-                Supports: {source.supports_claims.join(", ")}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </details>
-
       <div className="flex flex-wrap gap-3 border-t border-white/10 pt-5">
         <button
           className="button-primary"
@@ -529,7 +509,11 @@ function ResultCard({
           type="button"
         >
           {result.is_saved ? <Check aria-hidden="true" size={18} /> : null}
-          {result.is_saved ? "Saved" : saving ? "Saving…" : "Save company"}
+          {result.is_saved
+            ? "Saved and confirmed"
+            : saving
+              ? "Saving…"
+              : "Save and confirm"}
         </button>
         <button
           className="button-secondary"
@@ -559,7 +543,7 @@ function HiddenResultCard({
     <article className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-dashed border-white/15 bg-slate-950/25 px-6 py-5">
       <div>
         <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-          Hidden result · Rank #{result.rank}
+          Hidden result
         </p>
         <h2 className="mt-1 text-lg font-semibold text-slate-300">
           {result.company_name}
@@ -574,26 +558,6 @@ function HiddenResultCard({
         {showing ? "Showing…" : "Show result"}
       </button>
     </article>
-  );
-}
-
-function ScoreGrid({ result }: { result: Result }) {
-  const scores = [
-    ["Industry", result.scores.industry],
-    ["Historical H1-B", result.scores.historical_h1b_sponsorship],
-    ["Internship", result.scores.internship],
-    ["Careers page", result.scores.careers_page_support],
-    ["Current openings", result.scores.current_openings],
-  ];
-  return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-      {scores.map(([label, value]) => (
-        <div className="rounded-xl bg-white/[0.04] p-3" key={label}>
-          <p className="text-xl font-semibold text-white">{value}</p>
-          <p className="mt-1 text-xs text-slate-500">{label}</p>
-        </div>
-      ))}
-    </div>
   );
 }
 
@@ -627,31 +591,28 @@ function ExternalLinkText({ href, label }: { href: string; label: string }) {
 
 function h1bText(result: Result) {
   if (result.historical_h1b_status === "unresolved") {
-    return "No confident match was found in the loaded H1-B sponsorship data.";
+    return "No exact normalized employer-name match was found in the loaded DOL data.";
   }
   if (result.historical_h1b_status === "no_records") {
-    return "No matching records were found in the loaded H1-B sponsorship data.";
+    return "The exact normalized employer-name match has no records in the loaded DOL data.";
   }
-  return `${result.certified_h1b_cases} certified H1-B filings found across ${result.loaded_fiscal_years.join(", ")}. Historical activity does not guarantee sponsorship for this role.`;
+  return `${result.certified_h1b_cases} certified H1-B filings found across ${result.loaded_fiscal_years.join(", ")} by exact normalized employer-name match. This does not prove the AI company identity or guarantee sponsorship.`;
 }
 
 function careersUrlText(result: Result) {
-  if (result.careers_url_status === "evidence_verified") {
-    if (result.careers_url_reason.startsWith("CAREERS_PAGE_LISTING_VERIFIED")) {
-      return "JobScout opened this page during research and confirmed it lists individual openings.";
-    }
-    if (result.careers_url_reason === "CAREERS_PAGE_ATS_DISCOVERED") {
-      return "JobScout opened the cited careers page during research and followed it to the company's job board.";
-    }
+  if (result.careers_url_status === "page_checked") {
     if (result.careers_url_reason === "CAREERS_PAGE_NO_LISTING_FOUND") {
-      return "JobScout opened this page during research and found no individual job openings on it, so it will not be monitored.";
+      return "JobScout opened and inspected this page but found no individual openings, so it will not be monitored.";
     }
-    return "This link comes directly from a source returned by the research search. JobScout has not opened it.";
+    return "JobScout opened and inspected this careers page during discovery.";
+  }
+  if (result.careers_url_status === "research_linked") {
+    return "AI research returned this careers link, but JobScout did not successfully inspect the page.";
   }
   if (result.careers_url_status === "rejected") {
     return `A proposed careers source was rejected because it did not match its evidence (${result.careers_url_reason}).`;
   }
-  return "No manifest-backed careers source was selected by the research workflow.";
+  return "AI research did not provide an accepted careers source.";
 }
 
 function monitoringSupportText(status: Result["monitoring_support"]) {
@@ -662,7 +623,7 @@ function monitoringSupportText(status: Result["monitoring_support"]) {
     return "JobScout confirmed this page lists individual openings and can collect them automatically after you save the company. Pages like this are add/update-only, so a job disappearing is never treated as closed.";
   }
   if (status === "generic_pending") {
-    return "The careers link is verified, but JobScout must inspect the page after saving before it can promise automatic collection.";
+    return "The careers link came from research, but JobScout has not confirmed that automatic collection will work.";
   }
-  return "JobScout does not currently have a verified source it can monitor automatically.";
+  return "JobScout does not currently have a careers source it can monitor automatically.";
 }

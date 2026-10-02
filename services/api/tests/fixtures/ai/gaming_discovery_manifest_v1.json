@@ -1,12 +1,12 @@
 [
   {
     "source_id": "source_1",
-    "url": "https://acme-games.example/about",
+    "url": "https://acme-games.com/about",
     "title": "About Acme Games"
   },
   {
     "source_id": "source_2",
-    "url": "https://acme-games.example/students",
+    "url": "https://acme-games.com/students",
     "title": "Student programs"
   },
   {
@@ -16,12 +16,12 @@
   },
   {
     "source_id": "source_4",
-    "url": "https://pixel-forge.example/company",
+    "url": "https://pixel-forge.com/company",
     "title": "Pixel Forge company"
   },
   {
     "source_id": "source_5",
-    "url": "https://pixel-forge.example/internships",
+    "url": "https://pixel-forge.com/internships",
     "title": "Pixel Forge internships"
   },
   {

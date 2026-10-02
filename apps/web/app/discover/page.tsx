@@ -8,14 +8,15 @@ export default function DiscoverPage() {
         <p className="eyebrow">Company discovery</p>
         <h1 className="page-title">Find US employers worth following.</h1>
         <p className="page-intro">
-          Enter an industry and JobScout will research up to 20 companies,
-          validate its sources, and rank the results with a reproducible score.
+          Enter an industry and JobScout will research up to 40 company
+          suggestions, check usable careers sources, and show the results
+          alphabetically.
         </p>
         <DiscoverySearch />
         <p className="mt-6 max-w-3xl text-sm leading-6 text-slate-500">
-          Ranked recommendations depend on available public evidence. Results
-          are not exhaustive, and historical H-1B sponsorship activity does not
-          guarantee sponsorship for a specific position.
+          AI suggestions may be incomplete or wrong. Save and confirm a company
+          before treating it as verified in this installation. Historical H-1B
+          activity does not guarantee sponsorship for a specific position.
         </p>
       </section>
     </AppShell>

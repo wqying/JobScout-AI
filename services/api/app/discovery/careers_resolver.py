@@ -21,10 +21,9 @@ import structlog
 
 from app.core.config import Settings
 from app.discovery.validation import (
-    MONITORABILITY_SCORES,
     STRUCTURED_PROVIDERS,
     CareersResolution,
-    ValidatedProposal,
+    DiscoveryCandidate,
     structured_careers_url,
 )
 from app.monitoring.http import HttpFetcher
@@ -51,36 +50,11 @@ class _PageOutcome:
     job_links: list[JobLink]
 
 
-def openings_score(job_link_count: int, minimum: int) -> int:
-    """Score current openings from what the resolver actually counted."""
-
-    if job_link_count >= minimum:
-        return 100
-    if job_link_count > 0:
-        return 50
-    return 0
-
-
-def needs_resolution(item: ValidatedProposal) -> bool:
+def needs_resolution(item: DiscoveryCandidate) -> bool:
     return item.careers.url is not None and item.careers.monitoring_support == "generic_pending"
 
 
-def provisional_rank_key(item: ValidatedProposal) -> tuple[int, int, int, str]:
-    """Order candidates before resolution so the fetch budget buys the most visible results.
-
-    Sponsorship is deliberately absent: it needs per-company database work that has not happened
-    yet at this point in the workflow, and adding it here would serialize the whole stage.
-    """
-
-    return (
-        -item.proposal.industry_relevance,
-        -int(item.internship_verified),
-        -item.careers.monitorability_score,
-        item.proposal.canonical_name.casefold(),
-    )
-
-
-def skipped_for_budget(item: ValidatedProposal) -> ResolvedCareers:
+def skipped_for_budget(item: DiscoveryCandidate) -> ResolvedCareers:
     return ResolvedCareers(
         careers=replace(item.careers, reason="CAREERS_RESOLUTION_SKIPPED_BUDGET"),
         job_link_count=0,
@@ -99,8 +73,8 @@ class CareersPageResolver:
         self.settings = settings
         self.logger = logger or structlog.get_logger("jobscout.discovery")
 
-    async def resolve_all(self, items: list[ValidatedProposal]) -> dict[str, ResolvedCareers]:
-        """Resolve `items` concurrently, returning results keyed by official domain.
+    async def resolve_all(self, items: list[DiscoveryCandidate]) -> dict[str, ResolvedCareers]:
+        """Resolve `items` concurrently, returning results keyed by stable identity.
 
         Candidates whose resolution did not finish before the stage deadline are simply absent from
         the result; the caller keeps their unresolved classification.
@@ -110,9 +84,9 @@ class CareersPageResolver:
             return {}
         semaphore = asyncio.Semaphore(max(1, self.settings.discovery_resolve_concurrency))
 
-        async def run(item: ValidatedProposal) -> tuple[str, ResolvedCareers]:
+        async def run(item: DiscoveryCandidate) -> tuple[str, ResolvedCareers]:
             async with semaphore:
-                return item.official_domain, await self.resolve(item)
+                return item.identity_key, await self.resolve(item)
 
         tasks = [asyncio.create_task(run(item)) for item in items]
         done, pending = await asyncio.wait(
@@ -139,7 +113,7 @@ class CareersPageResolver:
             resolved[domain] = outcome
         return resolved
 
-    async def resolve(self, item: ValidatedProposal) -> ResolvedCareers:
+    async def resolve(self, item: DiscoveryCandidate) -> ResolvedCareers:
         seed = item.careers.url
         if seed is None or not needs_resolution(item):
             return ResolvedCareers(careers=item.careers)
@@ -184,15 +158,15 @@ class CareersPageResolver:
         return ResolvedCareers(
             careers=replace(
                 item.careers,
+                url_status="page_checked",
                 reason="CAREERS_PAGE_NO_LISTING_FOUND",
                 monitoring_support="unsupported",
-                monitorability_score=MONITORABILITY_SCORES["unsupported"],
             )
         )
 
     async def _follow_one_hop(
         self,
-        item: ValidatedProposal,
+        item: DiscoveryCandidate,
         seed_page: _PageOutcome,
         minimum: int,
     ) -> ResolvedCareers | None:
@@ -239,7 +213,7 @@ class CareersPageResolver:
             job_links=[] if board_url else extract_job_links(html, final_url),
         )
 
-    def _structured(self, item: ValidatedProposal, board_url: str, reason: str) -> ResolvedCareers:
+    def _structured(self, item: DiscoveryCandidate, board_url: str, reason: str) -> ResolvedCareers:
         self.logger.info(
             "careers_resolution_structured",
             company_name=item.proposal.canonical_name,
@@ -250,16 +224,15 @@ class CareersPageResolver:
             careers=replace(
                 item.careers,
                 url=board_url,
-                url_status="evidence_verified",
+                url_status="page_checked",
                 reason=reason,
                 monitoring_support="structured",
-                monitorability_score=MONITORABILITY_SCORES["structured"],
             )
         )
 
     def _listing(
         self,
-        item: ValidatedProposal,
+        item: DiscoveryCandidate,
         page: _PageOutcome,
         reason: str,
         job_links: list[JobLink],
@@ -275,10 +248,9 @@ class CareersPageResolver:
             careers=replace(
                 item.careers,
                 url=_https_only(page.url) or item.careers.url,
-                url_status="evidence_verified",
+                url_status="page_checked",
                 reason=reason,
                 monitoring_support="generic_verified",
-                monitorability_score=MONITORABILITY_SCORES["generic_verified"],
             ),
             job_link_count=len(job_links),
         )

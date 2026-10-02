@@ -39,7 +39,7 @@ class DiscoveryAIClient(Protocol):
         self,
         query: str,
         country: str,
-        excluded_companies: list[dict[str, str]] | None = None,
+        excluded_companies: list[dict[str, str | None]] | None = None,
     ) -> ResearchResponse: ...
 
     async def normalize(
@@ -96,7 +96,7 @@ class OpenAIResponsesClient:
         self,
         query: str,
         country: str,
-        excluded_companies: list[dict[str, str]] | None = None,
+        excluded_companies: list[dict[str, str | None]] | None = None,
     ) -> ResearchResponse:
         exclusions = excluded_companies or []
         exclusion_text = (
@@ -110,9 +110,10 @@ class OpenAIResponsesClient:
                 "model": self.research_model,
                 "store": False,
                 "instructions": (
-                    "Research US employers matching the requested industry. Find 30 to 40 "
-                    "credible candidates when evidence permits. For every company, identify the "
-                    "official website and cite sources for industry relevance and internships. "
+                    "Research US employers matching the requested industry. Find up to 40 "
+                    "plausible candidates and state uncertainty where evidence is thin. Identify "
+                    "official websites and sources for industry fit and internships when "
+                    "available. "
                     "For the careers page, cite the page that LISTS INDIVIDUAL OPEN ROLES with "
                     "clickable job titles: an applicant-tracking board root such as a Greenhouse, "
                     "Lever, Ashby, or SmartRecruiters board, or an 'all open positions' page on "
@@ -129,7 +130,7 @@ class OpenAIResponsesClient:
                 "include": ["web_search_call.action.sources"],
                 "max_tool_calls": self.max_web_search_calls,
                 "max_output_tokens": self.research_max_output_tokens,
-                "prompt_cache_key": "jobscout-company-research-v1",
+                "prompt_cache_key": "jobscout-company-research-v2",
             }
         )
         report = _extract_output_text(response)
@@ -159,8 +160,11 @@ class OpenAIResponsesClient:
                 "instructions": (
                     "Transform only the supplied research report and source manifest into the "
                     "requested schema. Do not browse, invent URLs or source IDs, or add claims "
-                    "absent from the report. Each source_reference must select a source_id "
-                    "verbatim from the supplied manifest. When a careers page is supported, "
+                    "absent from the report. Include every company named in the report even if "
+                    "no manifest source matches it; use an empty source_references list and a null "
+                    "official_website_url when those facts are unavailable. Each source_reference "
+                    "that is present must select a source_id verbatim from the supplied manifest. "
+                    "When a careers page is supported, "
                     "official_careers_source_id must select that same source_reference and the "
                     "reference must include careers_page in supports_claims. Use concise claim "
                     "labels such as industry, official_identity, careers_page, or internship."
@@ -171,7 +175,7 @@ class OpenAIResponsesClient:
                     ensure_ascii=False,
                 ),
                 "max_output_tokens": self.structured_max_output_tokens,
-                "prompt_cache_key": "jobscout-company-normalization-v2",
+                "prompt_cache_key": "jobscout-company-normalization-v3",
                 "text": {
                     "format": {
                         "type": "json_schema",

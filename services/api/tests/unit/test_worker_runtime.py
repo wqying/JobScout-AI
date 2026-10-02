@@ -57,6 +57,7 @@ async def test_discovery_task_guard_records_uncaught_failure(
             "WORKER_DATABASE_ERROR",
         ),
         (RuntimeError("OpenAI request failed"), "OPENAI_REQUEST_FAILED"),
+        (RuntimeError("No discovery results remained"), "NO_DISCOVERY_RESULTS"),
         (RuntimeError("unclassified"), "DISCOVERY_FAILED"),
     ],
 )

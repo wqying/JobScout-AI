@@ -10,16 +10,14 @@ from app.core.config import Settings
 from app.discovery.careers_resolver import (
     CareersPageResolver,
     needs_resolution,
-    openings_score,
-    provisional_rank_key,
 )
-from app.discovery.validation import ValidatedProposal, validate_proposal
+from app.discovery.validation import DiscoveryCandidate, validate_proposal
 from app.monitoring.http import SafeHttpResponse
 
-SEED = "https://acme.example/early-careers"
+SEED = "https://acme.com/early-careers"
 
 MANIFEST: list[dict[str, str | None]] = [
-    {"source_id": "source_1", "url": "https://acme.example/about", "title": "About"},
+    {"source_id": "source_1", "url": "https://acme.com/about", "title": "About"},
     {"source_id": "source_2", "url": SEED, "title": "Early careers"},
 ]
 
@@ -91,11 +89,10 @@ def _proposal(careers_source_id: str | None = "source_2") -> CompanyProposal:
             "canonical_name": "Acme",
             "aliases": [],
             "proposed_legal_entities": [],
-            "official_website_url": "https://acme.example",
+            "official_website_url": "https://acme.com",
             "official_careers_source_id": careers_source_id,
-            "industry_relevance": 90,
             "industry_explanation": "Acme builds verified test products.",
-            "has_internship_evidence": False,
+            "internship_research_reported": False,
             "source_references": [
                 {
                     "source_id": "source_1",
@@ -108,12 +105,11 @@ def _proposal(careers_source_id: str | None = "source_2") -> CompanyProposal:
                     "supports_claims": ["careers_page"],
                 },
             ],
-            "unresolved_questions": [],
         }
     )
 
 
-def _validated(careers_source_id: str | None = "source_2") -> ValidatedProposal:
+def _validated(careers_source_id: str | None = "source_2") -> DiscoveryCandidate:
     return validate_proposal(_proposal(careers_source_id), MANIFEST)
 
 
@@ -121,7 +117,7 @@ def test_a_cited_page_starts_unverified() -> None:
     item = _validated()
 
     assert item.careers.monitoring_support == "generic_pending"
-    assert item.monitorability_score == 50
+    assert item.careers.url_status == "research_linked"
     assert needs_resolution(item) is True
 
 
@@ -131,7 +127,7 @@ async def test_a_listing_page_is_verified_without_any_hop() -> None:
     resolved = await CareersPageResolver(fetcher, _settings()).resolve(_validated())
 
     assert resolved.careers.monitoring_support == "generic_verified"
-    assert resolved.careers.monitorability_score == 75
+    assert resolved.careers.url_status == "page_checked"
     assert resolved.careers.reason == "CAREERS_PAGE_LISTING_VERIFIED"
     assert resolved.job_link_count == 4
     assert fetcher.page_requests == [SEED]
@@ -143,13 +139,13 @@ async def test_an_embedded_board_is_promoted_to_its_provider_root() -> None:
     resolved = await CareersPageResolver(fetcher, _settings()).resolve(_validated())
 
     assert resolved.careers.monitoring_support == "structured"
-    assert resolved.careers.monitorability_score == 100
+    assert resolved.careers.url_status == "page_checked"
     assert resolved.careers.url == "https://boards.greenhouse.io/acmegames"
     assert resolved.careers.reason == "CAREERS_PAGE_ATS_DISCOVERED"
 
 
 async def test_an_informational_page_is_resolved_one_hop_to_its_listing() -> None:
-    listing = "https://acme.example/careers/search"
+    listing = "https://acme.com/careers/search"
     fetcher = RouteFetcher({SEED: INFORMATIONAL_HTML, listing: LISTING_HTML})
 
     resolved = await CareersPageResolver(fetcher, _settings()).resolve(_validated())
@@ -161,19 +157,19 @@ async def test_an_informational_page_is_resolved_one_hop_to_its_listing() -> Non
 
 
 async def test_a_hop_never_follows_another_hop() -> None:
-    listing = "https://acme.example/careers/search"
+    listing = "https://acme.com/careers/search"
     # The hop target is itself informational and links onward; the resolver must stop there.
     fetcher = RouteFetcher(
         {
             SEED: INFORMATIONAL_HTML,
             listing: '<a href="/jobs/search">View all jobs</a>',
-            "https://acme.example/jobs/search": LISTING_HTML,
+            "https://acme.com/jobs/search": LISTING_HTML,
         }
     )
 
     resolved = await CareersPageResolver(fetcher, _settings()).resolve(_validated())
 
-    assert "https://acme.example/jobs/search" not in fetcher.page_requests
+    assert "https://acme.com/jobs/search" not in fetcher.page_requests
     assert resolved.careers.monitoring_support == "unsupported"
 
 
@@ -183,8 +179,7 @@ async def test_a_listing_free_page_becomes_unsupported_but_keeps_its_url() -> No
     resolved = await CareersPageResolver(fetcher, _settings()).resolve(_validated())
 
     assert resolved.careers.monitoring_support == "unsupported"
-    assert resolved.careers.monitorability_score == 0
-    assert resolved.careers.url_status == "evidence_verified"
+    assert resolved.careers.url_status == "page_checked"
     assert resolved.careers.url == SEED
     assert resolved.careers.reason == "CAREERS_PAGE_NO_LISTING_FOUND"
 
@@ -210,7 +205,7 @@ async def test_every_fetch_failure_falls_back_instead_of_raising(error: Exceptio
     resolved = await CareersPageResolver(FailingFetcher(error), _settings()).resolve(_validated())
 
     assert resolved.careers.monitoring_support == "generic_pending"
-    assert resolved.careers.monitorability_score == 50
+    assert resolved.careers.url_status == "research_linked"
     assert resolved.careers.reason == "CAREERS_PAGE_UNREACHABLE"
     assert resolved.careers.url == SEED
 
@@ -242,31 +237,14 @@ async def test_a_candidate_with_no_careers_source_is_left_alone() -> None:
     assert fetcher.requests == []
 
 
-async def test_resolve_all_keys_results_by_official_domain() -> None:
+async def test_resolve_all_keys_results_by_stable_identity() -> None:
     fetcher = RouteFetcher({SEED: LISTING_HTML})
 
     resolved = await CareersPageResolver(fetcher, _settings()).resolve_all([_validated()])
 
-    assert set(resolved) == {"acme.example"}
-    assert resolved["acme.example"].careers.monitoring_support == "generic_verified"
+    assert set(resolved) == {"domain:acme.com"}
+    assert resolved["domain:acme.com"].careers.monitoring_support == "generic_verified"
 
 
 async def test_resolve_all_is_empty_without_candidates() -> None:
     assert await CareersPageResolver(RouteFetcher({}), _settings()).resolve_all([]) == {}
-
-
-@pytest.mark.parametrize(
-    ("count", "expected"),
-    [(0, 0), (1, 50), (2, 50), (3, 100), (12, 100)],
-)
-def test_openings_score_reflects_what_was_counted(count: int, expected: int) -> None:
-    assert openings_score(count, minimum=3) == expected
-
-
-def test_provisional_rank_prefers_the_most_relevant_candidate() -> None:
-    assert provisional_rank_key(_validated()) < provisional_rank_key(
-        validate_proposal(
-            _proposal().model_copy(update={"industry_relevance": 10}),
-            MANIFEST,
-        )
-    )

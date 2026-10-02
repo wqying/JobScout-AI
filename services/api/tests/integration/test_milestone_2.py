@@ -177,7 +177,6 @@ async def test_ai_proposed_legal_entity_is_not_counted(isolated_session: AsyncSe
             legal_name="Acme Games Inc",
             normalized_legal_name=normalize_employer_name("Acme Games Inc"),
             match_method="ai_proposed",
-            confidence=0.999,
         )
     )
     await isolated_session.commit()

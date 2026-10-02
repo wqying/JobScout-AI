@@ -12,11 +12,10 @@
       "canonical_name": "Acme Games",
       "aliases": ["Acme"],
       "proposed_legal_entities": ["Acme Games Inc"],
-      "official_website_url": "https://acme-games.example",
+      "official_website_url": "https://acme-games.com",
       "official_careers_source_id": "source_3",
-      "industry_relevance": 90,
       "industry_explanation": "Acme Games develops and publishes video games for US players.",
-      "has_internship_evidence": true,
+      "internship_research_reported": true,
       "source_references": [
         {
           "source_id": "source_1",
@@ -33,18 +32,16 @@
           "source_type": "search_lead",
           "supports_claims": ["careers_page"]
         }
-      ],
-      "unresolved_questions": []
+      ]
     },
     {
       "canonical_name": "Pixel Forge",
       "aliases": [],
       "proposed_legal_entities": [],
-      "official_website_url": "https://pixel-forge.example",
+      "official_website_url": "https://pixel-forge.com",
       "official_careers_source_id": "source_6",
-      "industry_relevance": 95,
       "industry_explanation": "Pixel Forge is an independent US game development studio.",
-      "has_internship_evidence": true,
+      "internship_research_reported": true,
       "source_references": [
         {
           "source_id": "source_4",
@@ -61,26 +58,23 @@
           "source_type": "search_lead",
           "supports_claims": ["careers_page"]
         }
-      ],
-      "unresolved_questions": []
+      ]
     },
     {
       "canonical_name": "Unsourced Studio",
       "aliases": [],
       "proposed_legal_entities": [],
-      "official_website_url": "https://unsourced.example",
+      "official_website_url": "https://unsourced.com",
       "official_careers_source_id": null,
-      "industry_relevance": 100,
       "industry_explanation": "This intentionally invalid fixture candidate cites another domain.",
-      "has_internship_evidence": false,
+      "internship_research_reported": false,
       "source_references": [
         {
-          "source_id": "source_1",
+          "source_id": "source_99",
           "source_type": "official_company",
           "supports_claims": ["industry"]
         }
-      ],
-      "unresolved_questions": []
+      ]
     }
   ]
 }

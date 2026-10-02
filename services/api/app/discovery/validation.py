@@ -1,18 +1,15 @@
 from __future__ import annotations
 
+import ipaddress
+import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app.ai.schemas.discovery import CompanyProposal, SourceReference
 from app.api.errors import AppError
-from app.companies.normalization import domain_from_url, normalize_https_url
+from app.companies.normalization import domain_from_url, normalize_https_url, normalize_query
 from app.monitoring.provider_detection import ProviderDetection, detect_provider
-
-# Industry relevance is often established by third-party coverage rather than a company's own
-# copy, so these types may support it. Company identity still requires an own-domain source, and
-# `search_lead` stays excluded because unverified snippets are leads, not evidence.
-SECONDARY_INDUSTRY_SOURCE_TYPES = frozenset({"reputable_directory", "official_government"})
 
 # Web search appends tracking parameters to cited URLs (for example `?utm_source=openai`) that the
 # manifest entries do not carry, so both sides are compared with those parameters removed.
@@ -25,7 +22,7 @@ SourceType = Literal[
     "reputable_directory",
     "search_lead",
 ]
-CareersUrlStatus = Literal["evidence_verified", "not_found", "rejected"]
+CareersUrlStatus = Literal["research_linked", "page_checked", "not_found", "rejected"]
 MonitoringSupport = Literal[
     "structured",
     "generic_verified",
@@ -35,15 +32,55 @@ MonitoringSupport = Literal[
 
 STRUCTURED_PROVIDERS = frozenset({"greenhouse", "lever", "ashby", "smartrecruiters"})
 
-# Monitorability by support level. `generic_verified` sits below a documented provider board
-# because a scraped listing is add/update-only, and above `generic_pending` because the resolver
-# has actually opened the page and counted real openings on it.
-MONITORABILITY_SCORES: dict[str, int] = {
-    "structured": 100,
-    "generic_verified": 75,
-    "generic_pending": 50,
-    "unsupported": 0,
-}
+SHARED_IDENTITY_HOSTS = frozenset(
+    {
+        "boards.greenhouse.io",
+        "job-boards.greenhouse.io",
+        "boards.eu.greenhouse.io",
+        "jobs.lever.co",
+        "jobs.eu.lever.co",
+        "jobs.ashbyhq.com",
+        "careers.smartrecruiters.com",
+        "jobs.smartrecruiters.com",
+        "greenhouse.io",
+        "lever.co",
+        "ashbyhq.com",
+        "smartrecruiters.com",
+        "linkedin.com",
+        "crunchbase.com",
+        "github.com",
+        "facebook.com",
+        "instagram.com",
+        "x.com",
+        "twitter.com",
+        "youtube.com",
+        "wikipedia.org",
+        "glassdoor.com",
+        "indeed.com",
+        "wellfound.com",
+        "builtin.com",
+    }
+)
+_INTERNAL_SUFFIXES = (
+    ".internal",
+    ".local",
+    ".localhost",
+    ".invalid",
+    ".example",
+    ".test",
+    ".corp",
+    ".lan",
+    ".home",
+)
+_DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_PAGE_CHECKED_REASONS = frozenset(
+    {
+        "CAREERS_PAGE_LISTING_VERIFIED",
+        "CAREERS_PAGE_LISTING_VERIFIED_VIA_LINK",
+        "CAREERS_PAGE_ATS_DISCOVERED",
+        "CAREERS_PAGE_NO_LISTING_FOUND",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -70,92 +107,54 @@ class CareersResolution:
     url_status: CareersUrlStatus
     reason: str
     monitoring_support: MonitoringSupport
-    monitorability_score: int
     source_id: str | None = None
 
 
 @dataclass(frozen=True)
-class ValidatedProposal:
+class DiscoveryCandidate:
     proposal: CompanyProposal
-    website_url: str
+    website_url: str | None
     careers: CareersResolution
-    official_domain: str
-    industry_source: ValidatedSource
-    industry_source_is_official: bool
-    verified_sources: list[ValidatedSource]
-    internship_verified: bool
+    official_domain: str | None
+    identity_key: str
+    research_source_status: Literal["matched", "unmatched"]
 
     @property
     def careers_url(self) -> str | None:
         return self.careers.url
 
-    @property
-    def monitorability_score(self) -> int:
-        return self.careers.monitorability_score
-
 
 def validate_proposal(
     proposal: CompanyProposal,
     source_manifest: list[dict[str, str | None]],
-) -> ValidatedProposal:
-    website_url = normalize_https_url(str(proposal.official_website_url))
-    official_domain = domain_from_url(website_url)
+) -> DiscoveryCandidate:
+    website_url, official_domain = _usable_company_website(proposal.official_website_url)
     manifest_by_id = _manifest_by_id(source_manifest)
     sourced = [
         resolved
         for reference in proposal.source_references
         if (resolved := _resolve_reference(reference, manifest_by_id)) is not None
     ]
-    own_domain_sources = [
-        reference for reference in sourced if _same_company_domain(reference.url, official_domain)
-    ]
-    if not own_domain_sources:
-        raise ValueError(
-            "Company has no official or reputable research-manifest-backed industry evidence"
-        )
-    official_industry_sources = [
-        reference
-        for reference in own_domain_sources
-        if reference.source_type == "official_company" and "industry" in _claims(reference)
-    ]
-    secondary_industry_sources = [
-        reference
-        for reference in sourced
-        if reference.source_type in SECONDARY_INDUSTRY_SOURCE_TYPES
-        and "industry" in _claims(reference)
-    ]
-    # An explicit industry citation is preferred, but a verified first-party page is enough on its
-    # own: identity is proven by the domain, and the model judges industry fit from its research.
-    industry_source = next(
-        iter([*official_industry_sources, *secondary_industry_sources, *own_domain_sources])
-    )
-    industry_source_is_official = industry_source.source_type == "official_company" and (
-        _same_company_domain(industry_source.url, official_domain)
-    )
-
     careers = _resolve_careers(proposal, sourced, official_domain)
-    internship_verified = proposal.has_internship_evidence and any(
-        reference.source_type == "official_company"
-        and "internship" in _claims(reference)
-        and _same_company_domain(reference.url, official_domain)
-        for reference in sourced
+    identity_key = (
+        f"domain:{official_domain}"
+        if official_domain is not None
+        else f"name:{normalize_query(proposal.canonical_name)}"
     )
-    return ValidatedProposal(
+    return DiscoveryCandidate(
         proposal=proposal,
         website_url=website_url,
         careers=careers,
         official_domain=official_domain,
-        industry_source=industry_source,
-        industry_source_is_official=industry_source_is_official,
-        verified_sources=sourced,
-        internship_verified=internship_verified,
+        identity_key=identity_key,
+        research_source_status="matched" if sourced else "unmatched",
     )
 
 
 def _resolve_careers(
     proposal: CompanyProposal,
     sourced: list[ValidatedSource],
-    official_domain: str,
+    official_domain: str | None,
 ) -> CareersResolution:
     selected_id = proposal.official_careers_source_id
     if selected_id is None:
@@ -164,7 +163,6 @@ def _resolve_careers(
             url_status="not_found",
             reason="CAREERS_SOURCE_NOT_SELECTED",
             monitoring_support="unsupported",
-            monitorability_score=0,
         )
 
     selected_reference = next(
@@ -191,24 +189,22 @@ def _resolve_careers(
     if detection.provider in STRUCTURED_PROVIDERS:
         return CareersResolution(
             url=structured_careers_url(detection, selected_source.url),
-            url_status="evidence_verified",
+            url_status="research_linked",
             reason="CAREERS_SOURCE_STRUCTURED_VERIFIED",
             monitoring_support="structured",
-            monitorability_score=MONITORABILITY_SCORES["structured"],
             source_id=selected_id,
         )
 
-    if not _same_company_domain(selected_source.url, official_domain):
+    if official_domain is None or not _same_company_domain(selected_source.url, official_domain):
         return _rejected_careers(selected_id, "CAREERS_SOURCE_DOMAIN_MISMATCH")
 
     # A manifest-backed URL on the official company domain is safe to retain as evidence. Its
     # collection capability remains pending until the bounded generic adapter inspects the page.
     return CareersResolution(
         url=_canonical_url(normalize_https_url(selected_source.url)),
-        url_status="evidence_verified",
+        url_status="research_linked",
         reason="CAREERS_SOURCE_OFFICIAL_DOMAIN_VERIFIED",
         monitoring_support="generic_pending",
-        monitorability_score=MONITORABILITY_SCORES["generic_pending"],
         source_id=selected_id,
     )
 
@@ -219,7 +215,6 @@ def _rejected_careers(source_id: str, reason: str) -> CareersResolution:
         url_status="rejected",
         reason=reason,
         monitoring_support="unsupported",
-        monitorability_score=0,
         source_id=source_id,
     )
 
@@ -275,6 +270,67 @@ def _same_company_domain(url: str, official_domain: str) -> bool:
     return hostname == official_domain or hostname.endswith(f".{official_domain}")
 
 
+def _usable_company_website(value: str | None) -> tuple[str | None, str | None]:
+    if value is None:
+        return None, None
+    try:
+        if urlsplit(value).scheme.casefold() != "https":
+            return None, None
+        website_url = normalize_https_url(value)
+        domain = domain_from_url(website_url).rstrip(".")
+    except (AppError, ValueError):
+        return None, None
+    if not _is_public_identity_domain(domain):
+        return None, None
+    return website_url, domain
+
+
+def _is_public_identity_domain(domain: str) -> bool:
+    hostname = domain.casefold().rstrip(".")
+    if hostname == "localhost" or hostname.endswith(_INTERNAL_SUFFIXES):
+        return False
+    try:
+        ipaddress.ip_address(hostname)
+    except ValueError:
+        pass
+    else:
+        return False
+    labels = hostname.split(".")
+    if (
+        len(labels) < 2
+        or labels[-1].isdigit()
+        or any(not _DNS_LABEL.fullmatch(label) for label in labels)
+    ):
+        return False
+    return not any(
+        hostname == shared or hostname.endswith(f".{shared}") for shared in SHARED_IDENTITY_HOSTS
+    )
+
+
+def legacy_careers_url_status(
+    value: object,
+    *,
+    careers_url: object,
+    reason: object,
+) -> CareersUrlStatus:
+    """Translate pre-migration JSON so old rows remain readable during rolling upgrades."""
+
+    if isinstance(value, str) and value in {
+        "research_linked",
+        "page_checked",
+        "not_found",
+        "rejected",
+    }:
+        return cast(CareersUrlStatus, value)
+    if isinstance(reason, str) and (
+        reason in _PAGE_CHECKED_REASONS or reason.startswith("CAREERS_PAGE_LISTING_")
+    ):
+        return "page_checked"
+    if careers_url or value == "evidence_verified":
+        return "research_linked"
+    return "not_found"
+
+
 def _canonical_url(url: str) -> str:
     parts = urlsplit(url)
     scheme = parts.scheme.lower()
@@ -306,9 +362,9 @@ def _manifest_by_id(
         url = item.get("url")
         if not isinstance(source_id, str) or not isinstance(url, str):
             continue
-        if urlsplit(url).scheme.casefold() != "https":
-            continue
         try:
+            if urlsplit(url).scheme.casefold() != "https":
+                continue
             normalized_url = normalize_https_url(url)
         except (AppError, ValueError):
             continue

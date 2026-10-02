@@ -90,7 +90,6 @@ class EvidenceResponse(BaseModel):
     source_domain: str
     is_official_source: bool
     observed_at: datetime
-    confidence: float
 
 
 class JobListResponse(BaseModel):

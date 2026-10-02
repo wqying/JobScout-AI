@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import func, or_, select
@@ -115,7 +114,6 @@ class CompanyService:
                 normalized_alias=normalized_name,
                 alias_type="brand",
                 source_url=normalized_careers_url,
-                confidence=Decimal("1.000"),
             )
         )
         await self._ensure_source(company, normalized_careers_url)
@@ -175,7 +173,6 @@ class CompanyService:
                         legal_name=payload.legal_entity_name,
                         normalized_legal_name=normalized_legal_name,
                         match_method="owner_verified",
-                        confidence=Decimal("1.000"),
                         evidence_url=company.official_website_url,
                         verified_at=now,
                     )
@@ -359,7 +356,6 @@ class CompanyService:
                     legal_name=matching_stat.legal_employer_name,
                     normalized_legal_name=normalized_name,
                     match_method="exact",
-                    confidence=Decimal("0.950"),
                     evidence_url=company.official_website_url,
                     verified_at=now,
                 )
@@ -368,7 +364,6 @@ class CompanyService:
 
         mapping.legal_name = matching_stat.legal_employer_name
         mapping.match_method = "exact"
-        mapping.confidence = Decimal("0.950")
         mapping.evidence_url = company.official_website_url
         mapping.verified_at = now
 
@@ -408,7 +403,6 @@ class CompanyService:
                         source_domain=domain_from_url(source_url),
                         is_official_source=True,
                         observed_at=now,
-                        confidence=Decimal("1.000"),
                     )
                 )
 
@@ -468,10 +462,7 @@ class CompanyService:
                         CompanyLegalEntity.company_id == company_id,
                         or_(
                             CompanyLegalEntity.match_method == "owner_verified",
-                            (
-                                (CompanyLegalEntity.match_method == "exact")
-                                & (CompanyLegalEntity.confidence >= Decimal("0.950"))
-                            ),
+                            CompanyLegalEntity.match_method == "exact",
                         ),
                     )
                 )

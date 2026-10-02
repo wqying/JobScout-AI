@@ -39,26 +39,36 @@ The versioned API prefix is `/api/v1`. Milestone 5 exposes:
   newest first, including cached and nonterminal or failed runs, with cursor pagination.
 - `GET /api/v1/discoveries` and `GET /api/v1/discoveries/{run_id}`: list runs and poll status,
   cache state, result count, safe failure code, and locally estimated API cost.
-- `GET /api/v1/discoveries/{run_id}/results`: list ranked sourced results and every score component.
+- `GET /api/v1/discoveries/{run_id}/results`: list alphabetical company suggestions and categorical
+  research, careers, monitoring, internship, and DOL facts.
 - `POST /api/v1/discoveries/{run_id}/results/{result_id}/hide`: hide a result only in this run.
 - `POST /api/v1/discoveries/{run_id}/results/{result_id}/show`: restore a hidden result.
 - `POST /api/v1/discoveries/{run_id}/save-selected`: idempotently save selected result IDs.
 - `POST /api/v1/discoveries/{run_id}/save-all-monitorable`: save every visible result whose
   careers page has collection support.
 
-Each discovery result reports careers evidence and collection capability independently.
-`careers_url_status` is `evidence_verified`, `not_found`, or `rejected`; `careers_url_reason`
+Each discovery result reports company inclusion, careers evidence, and collection capability
+independently. It includes `official_website_url`, `research_source_status` (`matched` or
+`unmatched`), `internship_research_reported`, and raw `current_openings_count`.
+`careers_url_status` is `research_linked`, `page_checked`, `not_found`, or `rejected`; `careers_url_reason`
 provides a stable diagnostic code; and `monitoring_support` is `structured`, `generic_verified`,
-`generic_pending`, or `unsupported`. A verified own-domain careers URL is therefore still returned
-while its generic HTML adapter awaits the first bounded resolution poll. The `sources` array
-includes the run-local `source_id` used to tie the structured proposal back to the web-search
-manifest.
+`generic_pending`, or `unsupported`. `research_linked` means the manifest-backed careers link was
+accepted but not successfully inspected. `page_checked` means JobScout fetched and inspected it.
+General research sources stay in private `ai_runs.source_manifest` traces and are not returned here.
 
 `generic_verified` means the discovery-time resolver opened the page and counted individual job
 links on it (DESIGN_DOC.md Section 13.7). `generic_pending` means the URL was cited on the right
 domain but never opened -- the resolver was disabled, out of budget, or could not reach the page;
 `careers_url_reason` says which. A page the resolver opened and found no openings on becomes
 `unsupported` and is not registered as a pollable source, while its URL stays visible as evidence.
+
+## Breaking discovery changes in `/api/v1`
+
+This release intentionally changes the existing local-only V1 contract. Discovery results remove
+`rank`, `opportunity_score`, `scores`, and `sources`; clients must use the categorical and factual
+fields above. The company evidence endpoint also removes `confidence`. Historical numerical values
+cannot be reconstructed by the migration downgrade. Stored legacy `NO_VERIFIED_RESULTS` failure
+codes remain readable, while new empty runs use `NO_DISCOVERY_RESULTS`.
 
 Interactive documentation is local at `/api/docs`. Errors use the stable
 `{ "error": { "code", "message", "details" } }` envelope. Validation errors and unexpected server
@@ -134,7 +144,8 @@ only; Research more continuations stay attached to their original root. At the n
 
 Cache identity for initial research includes the normalized query, country, both model IDs, and
 prompt version. The default TTL is a rolling seven-day duration rather than a midnight reset. Each research run
-stores up to 40 verified candidates. `GET /discoveries/{id}/results?offset=0&limit=20` pages across
+stores up to 40 structurally valid, deduplicated candidates. Results are ordered by case-insensitive
+company name and UUID. `GET /discoveries/{id}/results?offset=0&limit=20` pages across
 the initial run and its successful continuations; the web app follows those pages automatically and
 has no owner-operated Show more control. Reading persisted pages performs no AI call. The research worker
 makes two Responses API calls: bounded web research followed by web-disabled strict-schema

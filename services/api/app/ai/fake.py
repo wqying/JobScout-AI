@@ -21,13 +21,13 @@ class FakeDiscoveryAIClient:
         self.source_manifest = source_manifest
         self.research_calls = 0
         self.normalization_calls = 0
-        self.research_exclusions: list[list[dict[str, str]]] = []
+        self.research_exclusions: list[list[dict[str, str | None]]] = []
 
     async def research(
         self,
         query: str,
         country: str,
-        excluded_companies: list[dict[str, str]] | None = None,
+        excluded_companies: list[dict[str, str | None]] | None = None,
     ) -> ResearchResponse:
         self.research_calls += 1
         self.research_exclusions.append(deepcopy(excluded_companies or []))

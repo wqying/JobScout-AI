@@ -82,6 +82,6 @@ def discovery_error_code(exc: Exception) -> str:
         return "WORKER_DATABASE_ERROR"
     if isinstance(exc, RuntimeError) and "OpenAI" in message:
         return "OPENAI_REQUEST_FAILED"
-    if isinstance(exc, RuntimeError) and "No source-verified" in message:
-        return "NO_VERIFIED_RESULTS"
+    if isinstance(exc, RuntimeError) and "No discovery results remained" in message:
+        return "NO_DISCOVERY_RESULTS"
     return "DISCOVERY_FAILED"

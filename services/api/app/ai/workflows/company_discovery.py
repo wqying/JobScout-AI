@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import replace as replace_dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
 from uuid import UUID
 
 import structlog
@@ -18,6 +18,7 @@ from app.ai.client import (
 )
 from app.ai.pricing import estimate_cost_usd
 from app.ai.schemas.discovery import IndustryInterpretation
+from app.api.errors import AppError
 from app.companies.normalization import normalize_employer_name, normalize_query
 from app.core.config import Settings
 from app.db.models import (
@@ -25,7 +26,6 @@ from app.db.models import (
     CareerSource,
     Company,
     CompanyAlias,
-    CompanyEvidence,
     CompanyIndustry,
     CompanyLegalEntity,
     DiscoveryResult,
@@ -33,31 +33,27 @@ from app.db.models import (
     ImmigrationDatasetImport,
     IndustryQuery,
     LcaEmployerYearlyStat,
+    SavedCompany,
 )
 from app.discovery.careers_resolver import (
     RESOLVER_VERSION,
     CareersPageResolver,
     needs_resolution,
-    openings_score,
-    provisional_rank_key,
     skipped_for_budget,
 )
 from app.discovery.failures import DiscoveryFailureService, discovery_error_code
-from app.discovery.scoring import ScoreComponents, opportunity_score, sponsorship_score
 from app.discovery.service import MAX_RESULTS_PER_RESEARCH_RUN, PROMPT_VERSION
-from app.discovery.validation import ValidatedProposal, validate_proposal
+from app.discovery.validation import DiscoveryCandidate, validate_proposal
 from app.monitoring.http import HttpFetcher
 from app.monitoring.provider_detection import detect_provider
 
-SCHEMA_VERSION = "company-discovery-schema-v2"
+SCHEMA_VERSION = "company-discovery-schema-v3"
 
 
 @dataclass
-class RankedCandidate:
+class PersistedCandidate:
     company: Company
-    validated: ValidatedProposal
-    components: ScoreComponents
-    total: int
+    candidate: DiscoveryCandidate
     historical_status: str
     certified_cases: int
     loaded_years: list[int]
@@ -170,14 +166,16 @@ class CompanyDiscoveryWorkflow:
 
             candidates = await self._persist_candidates(
                 run,
-                industry_query,
                 normalized,
                 research.source_manifest,
-                excluded_domains={item["official_domain"] for item in excluded_companies},
+                excluded_identity_keys={
+                    _identity_key(item["canonical_name"] or "", item.get("official_domain"))
+                    for item in excluded_companies
+                },
             )
             if not candidates and run.root_discovery_run_id is None:
-                raise RuntimeError("No source-verified company candidates remained")
-            await self._persist_ranked_results(run, candidates)
+                raise RuntimeError("No discovery results remained")
+            await self._persist_results(run, candidates)
             finished = datetime.now(UTC)
             industry_query.interpretation_json = normalized.discovery.interpretation.model_dump(
                 mode="json"
@@ -233,17 +231,16 @@ class CompanyDiscoveryWorkflow:
     async def _persist_candidates(
         self,
         run: DiscoveryRun,
-        industry_query: IndustryQuery,
         normalized: NormalizationResponse,
         source_manifest: list[dict[str, str | None]],
-        excluded_domains: set[str] | None = None,
-    ) -> list[RankedCandidate]:
-        excluded_domains = excluded_domains or set()
-        validated: dict[str, ValidatedProposal] = {}
-        for proposal in normalized.discovery.companies[:40]:
+        excluded_identity_keys: set[str] | None = None,
+    ) -> list[PersistedCandidate]:
+        excluded_identity_keys = excluded_identity_keys or set()
+        validated: dict[str, DiscoveryCandidate] = {}
+        for proposal in normalized.discovery.companies:
             try:
                 item = validate_proposal(proposal, source_manifest)
-            except ValueError as exc:
+            except (AppError, ValueError) as exc:
                 self.logger.info(
                     "discovery_candidate_rejected",
                     discovery_run_id=str(run.id),
@@ -251,7 +248,7 @@ class CompanyDiscoveryWorkflow:
                     reason=str(exc),
                 )
                 continue
-            if item.official_domain in excluded_domains:
+            if item.identity_key in excluded_identity_keys:
                 self.logger.info(
                     "discovery_candidate_excluded",
                     discovery_run_id=str(run.id),
@@ -259,7 +256,7 @@ class CompanyDiscoveryWorkflow:
                     official_domain=item.official_domain,
                 )
                 continue
-            if item.careers.url_status != "evidence_verified":
+            if item.careers.url_status in {"not_found", "rejected"}:
                 self.logger.info(
                     "discovery_careers_source_unavailable",
                     discovery_run_id=str(run.id),
@@ -268,12 +265,8 @@ class CompanyDiscoveryWorkflow:
                     reason=item.careers.reason,
                     source_id=item.careers.source_id,
                 )
-            prior = validated.get(item.official_domain)
-            if (
-                prior is None
-                or item.proposal.industry_relevance > prior.proposal.industry_relevance
-            ):
-                validated[item.official_domain] = item
+            prior = validated.get(item.identity_key)
+            validated[item.identity_key] = item if prior is None else _merge_candidates(prior, item)
 
         latest_years = list(
             (
@@ -286,14 +279,19 @@ class CompanyDiscoveryWorkflow:
                 )
             ).all()
         )
-        resolved = await self._resolve_careers_pages(run, list(validated.values()))
-        candidates: list[RankedCandidate] = []
+        visible_candidates = list(validated.values())[:MAX_RESULTS_PER_RESEARCH_RUN]
+        resolved = await self._resolve_careers_pages(run, visible_candidates)
+        candidates: list[PersistedCandidate] = []
         for item, job_link_count in resolved:
-            company = await self._upsert_company(item)
-            await self._upsert_aliases(company, item)
+            company, allow_ai_identity_updates = await self._upsert_company(item)
+            if allow_ai_identity_updates:
+                await self._upsert_aliases(company, item)
             await self._upsert_source(company, item)
             historical_status, certified_cases, loaded_years = await self._historical_sponsorship(
-                company, item, latest_years
+                company,
+                item,
+                latest_years,
+                allow_ai_identity_updates=allow_ai_identity_updates,
             )
             await self._upsert_industry_and_evidence(
                 company,
@@ -304,23 +302,10 @@ class CompanyDiscoveryWorkflow:
                 loaded_years,
                 job_link_count,
             )
-            components = ScoreComponents(
-                industry=item.proposal.industry_relevance,
-                sponsorship=sponsorship_score(
-                    certified_cases, resolved=historical_status != "unresolved"
-                ),
-                internship=100 if item.internship_verified else 0,
-                monitorability=item.monitorability_score,
-                current_openings=openings_score(
-                    job_link_count, self.settings.discovery_resolve_min_job_links
-                ),
-            )
             candidates.append(
-                RankedCandidate(
+                PersistedCandidate(
                     company=company,
-                    validated=item,
-                    components=components,
-                    total=opportunity_score(components),
+                    candidate=item,
                     historical_status=historical_status,
                     certified_cases=certified_cases,
                     loaded_years=loaded_years,
@@ -331,8 +316,8 @@ class CompanyDiscoveryWorkflow:
     async def _resolve_careers_pages(
         self,
         run: DiscoveryRun,
-        items: list[ValidatedProposal],
-    ) -> list[tuple[ValidatedProposal, int]]:
+        items: list[DiscoveryCandidate],
+    ) -> list[tuple[DiscoveryCandidate, int]]:
         """Verify cited careers pages for the candidates the owner will actually see.
 
         Returns each candidate paired with the number of job links the resolver counted for it.
@@ -346,15 +331,15 @@ class CompanyDiscoveryWorkflow:
         if self.http is None or budget <= 0 or not pending:
             return [(item, 0) for item in items]
 
-        selected = sorted(pending, key=provisional_rank_key)[:budget]
-        selected_domains = {item.official_domain for item in selected}
+        selected = pending[:budget]
+        selected_keys = {item.identity_key for item in selected}
         resolutions = await CareersPageResolver(
             self.http, self.settings, logger=self.logger
         ).resolve_all(selected)
 
-        outcomes: list[tuple[ValidatedProposal, int]] = []
+        outcomes: list[tuple[DiscoveryCandidate, int]] = []
         for item in items:
-            resolution = resolutions.get(item.official_domain)
+            resolution = resolutions.get(item.identity_key)
             if resolution is not None:
                 outcomes.append(
                     (
@@ -362,7 +347,7 @@ class CompanyDiscoveryWorkflow:
                         resolution.job_link_count,
                     )
                 )
-            elif item.official_domain not in selected_domains and needs_resolution(item):
+            elif item.identity_key not in selected_keys and needs_resolution(item):
                 skipped = skipped_for_budget(item)
                 outcomes.append((replace_dataclass(item, careers=skipped.careers), 0))
             else:
@@ -376,10 +361,21 @@ class CompanyDiscoveryWorkflow:
         )
         return outcomes
 
-    async def _upsert_company(self, item: ValidatedProposal) -> Company:
-        company = await self.session.scalar(
-            select(Company).where(Company.official_domain == item.official_domain)
-        )
+    async def _upsert_company(self, item: DiscoveryCandidate) -> tuple[Company, bool]:
+        company = None
+        if item.official_domain is not None:
+            company = await self.session.scalar(
+                select(Company).where(Company.official_domain == item.official_domain)
+            )
+        if company is None and item.official_domain is None:
+            company = await self.session.scalar(
+                select(Company)
+                .where(
+                    Company.normalized_name == normalize_query(item.proposal.canonical_name),
+                    Company.official_domain.is_(None),
+                )
+                .order_by(Company.created_at, Company.id)
+            )
         now = datetime.now(UTC)
         if company is None:
             company = Company(
@@ -389,21 +385,25 @@ class CompanyDiscoveryWorkflow:
                 official_website_url=item.website_url,
                 headquarters_country="US",
                 description=item.proposal.industry_explanation,
-                verification_status="verified",
-                verified_at=now,
+                verification_status="proposed",
+                verified_at=None,
             )
             self.session.add(company)
             await self.session.flush()
+            return company, True
         else:
-            company.official_website_url = item.website_url
-            company.description = item.proposal.industry_explanation
-            company.verification_status = "verified"
-            company.verified_at = now
-            company.updated_at = now
-        return company
+            is_saved = await self.session.scalar(
+                select(SavedCompany.id).where(SavedCompany.company_id == company.id)
+            )
+            allow_ai_identity_updates = company.verification_status != "verified" and not is_saved
+            if allow_ai_identity_updates:
+                company.official_domain = item.official_domain
+                company.official_website_url = item.website_url
+                company.description = item.proposal.industry_explanation
+                company.updated_at = now
+            return company, allow_ai_identity_updates
 
-    async def _upsert_aliases(self, company: Company, item: ValidatedProposal) -> None:
-        source_url = str(item.industry_source.url)
+    async def _upsert_aliases(self, company: Company, item: DiscoveryCandidate) -> None:
         for alias in [item.proposal.canonical_name, *item.proposal.aliases]:
             normalized_alias = normalize_query(alias)
             exists = await self.session.scalar(
@@ -419,12 +419,11 @@ class CompanyDiscoveryWorkflow:
                         alias=alias,
                         normalized_alias=normalized_alias,
                         alias_type="brand",
-                        source_url=source_url,
-                        confidence=Decimal("0.900"),
+                        source_url=None,
                     )
                 )
 
-    async def _upsert_source(self, company: Company, item: ValidatedProposal) -> None:
+    async def _upsert_source(self, company: Company, item: DiscoveryCandidate) -> None:
         if item.careers_url is None:
             return
         if item.careers.monitoring_support == "unsupported":
@@ -454,10 +453,13 @@ class CompanyDiscoveryWorkflow:
     async def _historical_sponsorship(
         self,
         company: Company,
-        item: ValidatedProposal,
+        item: DiscoveryCandidate,
         latest_years: list[int],
+        *,
+        allow_ai_identity_updates: bool = True,
     ) -> tuple[str, int, list[int]]:
-        for legal_name in item.proposal.proposed_legal_entities:
+        proposed_names = item.proposal.proposed_legal_entities if allow_ai_identity_updates else []
+        for legal_name in proposed_names:
             normalized = normalize_employer_name(legal_name)
             exists = await self.session.scalar(
                 select(CompanyLegalEntity.id).where(
@@ -472,8 +474,7 @@ class CompanyDiscoveryWorkflow:
                         legal_name=legal_name,
                         normalized_legal_name=normalized,
                         match_method="ai_proposed",
-                        confidence=Decimal("0.700"),
-                        evidence_url=str(item.industry_source.url),
+                        evidence_url=None,
                     )
                 )
 
@@ -503,14 +504,12 @@ class CompanyDiscoveryWorkflow:
                     legal_name=exact_stat.legal_employer_name,
                     normalized_legal_name=canonical_legal_name,
                     match_method="exact",
-                    confidence=Decimal("0.950"),
-                    evidence_url=str(item.industry_source.url),
+                    evidence_url=None,
                     verified_at=datetime.now(UTC),
                 )
                 self.session.add(mapping)
-            else:
+            elif mapping.match_method != "owner_verified":
                 mapping.match_method = "exact"
-                mapping.confidence = Decimal("0.950")
                 mapping.verified_at = datetime.now(UTC)
 
         allowed_names = list(
@@ -518,13 +517,7 @@ class CompanyDiscoveryWorkflow:
                 await self.session.scalars(
                     select(CompanyLegalEntity.normalized_legal_name).where(
                         CompanyLegalEntity.company_id == company.id,
-                        (
-                            (CompanyLegalEntity.match_method == "owner_verified")
-                            | (
-                                (CompanyLegalEntity.match_method == "exact")
-                                & (CompanyLegalEntity.confidence >= Decimal("0.950"))
-                            )
-                        ),
+                        CompanyLegalEntity.match_method.in_(("exact", "owner_verified")),
                     )
                 )
             ).all()
@@ -550,7 +543,7 @@ class CompanyDiscoveryWorkflow:
     async def _upsert_industry_and_evidence(
         self,
         company: Company,
-        item: ValidatedProposal,
+        item: DiscoveryCandidate,
         normalized: NormalizationResponse,
         historical_status: str,
         certified_cases: int,
@@ -559,7 +552,6 @@ class CompanyDiscoveryWorkflow:
     ) -> None:
         interpretation = normalized.discovery.interpretation
         metadata = {
-            "sources": [source.as_metadata() for source in item.verified_sources],
             "careers_url": item.careers_url,
             "careers_source_id": item.careers.source_id,
             "careers_url_status": item.careers.url_status,
@@ -567,7 +559,6 @@ class CompanyDiscoveryWorkflow:
             "monitoring_support": item.careers.monitoring_support,
             "current_openings_count": job_link_count,
             "careers_resolver_version": RESOLVER_VERSION,
-            "internship_evidence": item.internship_verified,
             "historical_h1b_status": historical_status,
             "certified_h1b_cases": certified_cases,
             "loaded_fiscal_years": loaded_years,
@@ -579,110 +570,40 @@ class CompanyDiscoveryWorkflow:
                     company_id=company.id,
                     industry_slug=interpretation.slug,
                     industry_label=interpretation.normalized_label,
-                    relevance_score=item.proposal.industry_relevance,
                     evidence_json=metadata,
                 )
             )
         else:
             industry.industry_label = interpretation.normalized_label
-            industry.relevance_score = item.proposal.industry_relevance
             industry.evidence_json = metadata
 
-        await self._ensure_evidence(
-            company,
-            evidence_type="industry",
-            claim=item.proposal.industry_explanation,
-            status="supports",
-            source_url=str(item.industry_source.url),
-            source_title=item.industry_source.title,
-            is_official_source=item.industry_source_is_official,
-        )
-        if item.internship_verified:
-            source = next(
-                source
-                for source in item.verified_sources
-                if "internship" in {claim.lower() for claim in source.supports_claims}
-            )
-            await self._ensure_evidence(
-                company,
-                evidence_type="internship_program",
-                claim="Official company content provides internship evidence.",
-                status="supports",
-                source_url=str(source.url),
-                source_title=source.title,
-            )
-
-    async def _ensure_evidence(
-        self,
-        company: Company,
-        *,
-        evidence_type: str,
-        claim: str,
-        status: str,
-        source_url: str,
-        source_title: str | None,
-        is_official_source: bool = True,
+    async def _persist_results(
+        self, run: DiscoveryRun, candidates: list[PersistedCandidate]
     ) -> None:
-        exists = await self.session.scalar(
-            select(CompanyEvidence.id).where(
-                CompanyEvidence.company_id == company.id,
-                CompanyEvidence.evidence_type == evidence_type,
-                CompanyEvidence.source_url == source_url,
-                CompanyEvidence.claim == claim,
-            )
-        )
-        if exists is None:
-            from app.companies.normalization import domain_from_url
-
-            self.session.add(
-                CompanyEvidence(
-                    company_id=company.id,
-                    evidence_type=evidence_type,
-                    claim=claim,
-                    status=status,
-                    source_url=source_url,
-                    source_title=source_title,
-                    source_domain=domain_from_url(source_url),
-                    is_official_source=is_official_source,
-                    observed_at=datetime.now(UTC),
-                    confidence=Decimal("0.900"),
-                )
-            )
-
-    async def _persist_ranked_results(
-        self, run: DiscoveryRun, candidates: list[RankedCandidate]
-    ) -> None:
-        candidates.sort(
-            key=lambda candidate: (
-                -candidate.total,
-                -candidate.components.sponsorship,
-                -candidate.components.internship,
-                -candidate.components.monitorability,
-                candidate.company.canonical_name.casefold(),
-            )
-        )
-        for rank, candidate in enumerate(candidates[:MAX_RESULTS_PER_RESEARCH_RUN], start=1):
+        for candidate in candidates[:MAX_RESULTS_PER_RESEARCH_RUN]:
             self.session.add(
                 DiscoveryResult(
                     discovery_run_id=run.id,
                     company_id=candidate.company.id,
-                    rank=rank,
-                    opportunity_score=candidate.total,
-                    industry_score=candidate.components.industry,
-                    sponsorship_score=candidate.components.sponsorship,
-                    internship_score=candidate.components.internship,
-                    monitorability_score=candidate.components.monitorability,
-                    current_openings_score=candidate.components.current_openings,
-                    explanation=candidate.validated.proposal.industry_explanation,
+                    research_source_status=candidate.candidate.research_source_status,
+                    internship_research_reported=(
+                        candidate.candidate.proposal.internship_research_reported
+                    ),
+                    explanation=candidate.candidate.proposal.industry_explanation,
                 )
             )
 
-    async def _excluded_companies(self, run: DiscoveryRun) -> list[dict[str, str]]:
+    async def _excluded_companies(self, run: DiscoveryRun) -> list[dict[str, str | None]]:
         if run.root_discovery_run_id is None:
             return []
         rows = (
             await self.session.execute(
-                select(Company.canonical_name, Company.official_domain)
+                select(
+                    Company.canonical_name,
+                    Company.official_domain,
+                    func.lower(Company.canonical_name).label("normalized_order"),
+                    Company.id,
+                )
                 .join(DiscoveryResult, DiscoveryResult.company_id == Company.id)
                 .join(DiscoveryRun, DiscoveryRun.id == DiscoveryResult.discovery_run_id)
                 .where(
@@ -694,12 +615,12 @@ class CompanyDiscoveryWorkflow:
                     DiscoveryRun.status == "succeeded",
                 )
                 .distinct()
-                .order_by(Company.official_domain)
+                .order_by(func.lower(Company.canonical_name), Company.id)
             )
         ).all()
         return [
             {"canonical_name": canonical_name, "official_domain": official_domain}
-            for canonical_name, official_domain in rows
+            for canonical_name, official_domain, _normalized_order, _company_id in rows
         ]
 
     def _new_trace(
@@ -744,3 +665,74 @@ class CompanyDiscoveryWorkflow:
             web_search_per_call=self.settings.openai_web_search_cost_per_call_usd,
         )
         trace.finished_at = datetime.now(UTC)
+
+
+def _identity_key(canonical_name: str, official_domain: str | None) -> str:
+    if official_domain:
+        return f"domain:{official_domain.casefold()}"
+    return f"name:{normalize_query(canonical_name)}"
+
+
+def _merge_candidates(
+    first: DiscoveryCandidate,
+    later: DiscoveryCandidate,
+) -> DiscoveryCandidate:
+    """Merge duplicate AI proposals while preserving the first proposal's presentation."""
+
+    aliases = _union_strings(first.proposal.aliases, later.proposal.aliases, normalize_query)
+    legal_entities = _union_strings(
+        first.proposal.proposed_legal_entities,
+        later.proposal.proposed_legal_entities,
+        normalize_employer_name,
+    )
+    references = list(first.proposal.source_references)
+    seen_references = {
+        (reference.source_id, reference.source_type, tuple(reference.supports_claims))
+        for reference in references
+    }
+    for reference in later.proposal.source_references:
+        key = (reference.source_id, reference.source_type, tuple(reference.supports_claims))
+        if key not in seen_references:
+            references.append(reference)
+            seen_references.add(key)
+
+    use_later_careers = first.careers.url is None and later.careers.url is not None
+    proposal = first.proposal.model_copy(
+        update={
+            "aliases": aliases,
+            "proposed_legal_entities": legal_entities,
+            "official_careers_source_id": (
+                later.proposal.official_careers_source_id
+                if use_later_careers
+                else first.proposal.official_careers_source_id
+            ),
+            "internship_research_reported": (
+                first.proposal.internship_research_reported
+                or later.proposal.internship_research_reported
+            ),
+            "source_references": references,
+        }
+    )
+    return replace_dataclass(
+        first,
+        proposal=proposal,
+        careers=later.careers if use_later_careers else first.careers,
+        research_source_status=(
+            "matched"
+            if "matched" in {first.research_source_status, later.research_source_status}
+            else "unmatched"
+        ),
+    )
+
+
+def _union_strings(
+    first: list[str], later: list[str], normalizer: Callable[[str], str]
+) -> list[str]:
+    output = list(first)
+    seen = {normalizer(value) for value in output}
+    for value in later:
+        key = normalizer(value)
+        if key not in seen:
+            output.append(value)
+            seen.add(key)
+    return output

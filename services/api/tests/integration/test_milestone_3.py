@@ -17,6 +17,8 @@ from app.db.models import (
     AiRun,
     CareerSource,
     Company,
+    CompanyAlias,
+    CompanyLegalEntity,
     DiscoveryResult,
     DiscoveryRun,
     IndustryQuery,
@@ -26,6 +28,7 @@ from app.discovery.failures import DiscoveryFailureService
 from app.discovery.local_day import LocalDayWindow
 from app.discovery.schemas import DiscoveryCreate, DiscoveryResearchMoreRequest
 from app.discovery.service import DiscoveryService
+from app.discovery.validation import validate_proposal
 from app.immigration.importer import LcaImporter
 from app.monitoring.http import SafeHttpResponse
 
@@ -74,11 +77,10 @@ def _studio_discovery(indices: list[int]) -> NormalizedDiscovery:
                     "canonical_name": f"Studio {index}",
                     "aliases": [],
                     "proposed_legal_entities": [],
-                    "official_website_url": f"https://studio-{index}.example",
+                    "official_website_url": f"https://studio-{index}.com",
                     "official_careers_source_id": f"source_{index * 2 + 2}",
-                    "industry_relevance": 90 - (index % 10),
                     "industry_explanation": (f"Studio {index} develops and publishes video games."),
-                    "has_internship_evidence": False,
+                    "internship_research_reported": False,
                     "source_references": [
                         {
                             "source_id": f"source_{index * 2 + 1}",
@@ -91,7 +93,6 @@ def _studio_discovery(indices: list[int]) -> NormalizedDiscovery:
                             "supports_claims": ["careers_page"],
                         },
                     ],
-                    "unresolved_questions": [],
                 }
                 for index in indices
             ],
@@ -106,7 +107,7 @@ def _manifest(indices: list[int]) -> list[dict[str, str | None]]:
         for source in (
             {
                 "source_id": f"source_{index * 2 + 1}",
-                "url": f"https://studio-{index}.example/about",
+                "url": f"https://studio-{index}.com/about",
                 "title": f"Studio {index} about",
             },
             {
@@ -147,12 +148,35 @@ async def test_fake_discovery_orders_filters_traces_and_caches(
     assert completed.status == "succeeded"
     assert completed.cached is False
     assert completed.estimated_cost_usd > 0
-    assert [item.company_name for item in results.items] == ["Acme Games", "Pixel Forge"]
-    assert results.items[0].opportunity_score == 65
+    assert [item.company_name for item in results.items] == [
+        "Acme Games",
+        "Pixel Forge",
+        "Unsourced Studio",
+    ]
     assert results.items[0].certified_h1b_cases == 2
-    assert all(item.company_name != "Unsourced Studio" for item in results.items)
+    assert {item.company_name for item in results.items} == {
+        "Acme Games",
+        "Pixel Forge",
+        "Unsourced Studio",
+    }
+    assert (
+        next(
+            item for item in results.items if item.company_name == "Unsourced Studio"
+        ).research_source_status
+        == "unmatched"
+    )
     assert fake.research_calls == 1
     assert fake.normalization_calls == 1
+    assert set(
+        (
+            await isolated_session.scalars(
+                select(Company.verification_status).order_by(Company.canonical_name)
+            )
+        ).all()
+    ) == {"proposed"}
+
+    await service.hide(first.id, results.items[0].id)
+    assert (await service.results(first.id)).items[0].is_hidden is True
 
     cached = await service.create(
         DiscoveryCreate(query="  GAMING   companies "),
@@ -163,32 +187,142 @@ async def test_fake_discovery_orders_filters_traces_and_caches(
     assert cached.status == "succeeded"
     assert cached.cached is True
     assert cached.estimated_cost_usd == 0
+    assert all(item.is_hidden is False for item in cached_results.items)
     assert [item.company_name for item in cached_results.items] == [
         "Acme Games",
         "Pixel Forge",
+        "Unsourced Studio",
     ]
     assert fake.research_calls == 1
     assert await isolated_session.scalar(select(func.count()).select_from(IndustryQuery)) == 1
     assert await isolated_session.scalar(select(func.count()).select_from(DiscoveryRun)) == 2
-    assert await isolated_session.scalar(select(func.count()).select_from(DiscoveryResult)) == 4
+    assert await isolated_session.scalar(select(func.count()).select_from(DiscoveryResult)) == 6
     assert await isolated_session.scalar(select(func.count()).select_from(AiRun)) == 2
 
     assert all(item.is_saved is False for item in results.items)
     selected = await service.save_selected(first.id, [results.items[0].id])
     assert selected.saved_company_ids == [results.items[0].company_id]
+    assert (
+        await isolated_session.get(Company, results.items[0].company_id)
+    ).verification_status == "verified"
+
+    owner_mapping = await isolated_session.scalar(
+        select(CompanyLegalEntity).where(
+            CompanyLegalEntity.company_id == results.items[0].company_id,
+            CompanyLegalEntity.match_method == "exact",
+        )
+    )
+    assert owner_mapping is not None
+    owner_mapping.match_method = "owner_verified"
+    owner_verified_at = datetime(2024, 1, 1, tzinfo=UTC)
+    owner_mapping.verified_at = owner_verified_at
+    await CompanyDiscoveryWorkflow(isolated_session, fake, settings)._historical_sponsorship(
+        await isolated_session.get(Company, results.items[0].company_id),
+        validate_proposal(discovery.companies[0], manifest),
+        [2025],
+    )
+    assert owner_mapping.match_method == "owner_verified"
+    assert owner_mapping.verified_at == owner_verified_at
 
     refreshed_results = await service.results(first.id)
     saved_companies = await CompanyService(isolated_session).list_saved()
-    assert [item.is_saved for item in refreshed_results.items] == [True, False]
+    assert [item.is_saved for item in refreshed_results.items] == [True, False, False]
     assert [item.id for item in saved_companies.items] == [results.items[0].company_id]
 
     await service.save_selected(first.id, [results.items[0].id])
     assert await isolated_session.scalar(select(func.count()).select_from(SavedCompany)) == 1
 
     saved_all = await service.save_all_monitorable(cached.id)
-    assert set(saved_all.saved_company_ids) == {item.company_id for item in cached_results.items}
+    assert set(saved_all.saved_company_ids) == {
+        item.company_id for item in cached_results.items if item.monitoring_support != "unsupported"
+    }
     assert await isolated_session.scalar(select(func.count()).select_from(SavedCompany)) == 2
-    assert all(item.is_saved for item in (await service.results(cached.id)).items)
+    assert [item.is_saved for item in (await service.results(cached.id)).items] == [
+        True,
+        True,
+        False,
+    ]
+
+
+async def test_confirmed_company_keeps_owner_identity_when_rediscovered(
+    isolated_session: AsyncSession,
+) -> None:
+    discovery = NormalizedDiscovery.model_validate(json.loads(AI_FIXTURE.read_text()))
+    manifest = json.loads(AI_MANIFEST_FIXTURE.read_text())
+    fake = FakeDiscoveryAIClient(discovery, manifest)
+    settings = Settings(
+        app_env="test",
+        openai_api_key="test-key",
+        openai_research_model=fake.research_model,
+        openai_structured_model=fake.structured_model,
+    )
+    service = DiscoveryService(isolated_session, settings)
+    first = await service.create(DiscoveryCreate(query="gaming companies"), _local_day())
+    await CompanyDiscoveryWorkflow(isolated_session, fake, settings).execute(first.id)
+    first_results = await service.results(first.id)
+    first_company = await isolated_session.get(Company, first_results.items[0].company_id)
+    assert first_company is not None
+    original_description = first_company.description
+    await service.save_selected(first.id, [first_results.items[0].id])
+
+    proposed = discovery.companies[0].model_copy(deep=True)
+    proposed.aliases = [*proposed.aliases, "AI Only Alias"]
+    proposed.proposed_legal_entities = ["AI Only Legal LLC"]
+    proposed.industry_explanation = "A new AI description that should not replace owner data."
+    second_discovery = discovery.model_copy(deep=True)
+    second_discovery.companies = [proposed]
+    second_fake = FakeDiscoveryAIClient(second_discovery, manifest)
+    second = await service.create(DiscoveryCreate(query="gaming studios"), _local_day())
+    await CompanyDiscoveryWorkflow(isolated_session, second_fake, settings).execute(second.id)
+
+    company = await isolated_session.get(Company, first_company.id)
+    assert company is not None
+    assert company.description == original_description
+    assert company.verification_status == "verified"
+    assert (
+        await isolated_session.scalar(
+            select(func.count())
+            .select_from(CompanyLegalEntity)
+            .where(
+                CompanyLegalEntity.company_id == company.id,
+                CompanyLegalEntity.normalized_legal_name == "ai only legal",
+            )
+        )
+        == 0
+    )
+    assert (
+        await isolated_session.scalar(
+            select(func.count())
+            .select_from(CompanyAlias)
+            .where(
+                CompanyAlias.company_id == company.id,
+                CompanyAlias.normalized_alias == "ai only alias",
+            )
+        )
+        == 0
+    )
+
+
+async def test_name_only_suggestion_does_not_erase_existing_company_domain(
+    isolated_session: AsyncSession,
+) -> None:
+    discovery = NormalizedDiscovery.model_validate(json.loads(AI_FIXTURE.read_text()))
+    manifest = json.loads(AI_MANIFEST_FIXTURE.read_text())
+    fake = FakeDiscoveryAIClient(discovery, manifest)
+    settings = Settings(app_env="test", openai_api_key="test-key")
+    workflow = CompanyDiscoveryWorkflow(isolated_session, fake, settings)
+    anchored = validate_proposal(discovery.companies[0], manifest)
+    original, _ = await workflow._upsert_company(anchored)
+    missing_website = discovery.companies[0].model_copy(
+        update={"official_website_url": "https://linkedin.com/company/acme-games"}
+    )
+    name_only = validate_proposal(missing_website, manifest)
+
+    separate, _ = await workflow._upsert_company(name_only)
+
+    assert separate.id != original.id
+    assert original.official_domain == "acme-games.com"
+    assert separate.official_domain is None
 
 
 async def test_bounded_results_pagination_and_research_more_avoid_series_duplicates(
@@ -238,7 +372,7 @@ async def test_bounded_results_pagination_and_research_more_avoid_series_duplica
     assert fake.research_calls == 2
     assert len(fake.research_exclusions[1]) == 25
     assert {item["official_domain"] for item in fake.research_exclusions[1]} == {
-        f"studio-{index}.example" for index in range(25)
+        f"studio-{index}.com" for index in range(25)
     }
 
     await service.hide(initial.id, combined.items[0].id)
@@ -254,6 +388,29 @@ async def test_bounded_results_pagination_and_research_more_avoid_series_duplica
     assert cached_initial.cached is True
     assert cached_initial_results.total == 25
     assert fake.research_calls == 2
+
+
+async def test_result_limit_is_applied_after_duplicate_proposals_are_merged(
+    isolated_session: AsyncSession,
+) -> None:
+    indices = [0, 0, *range(1, 41)]
+    fake = FakeDiscoveryAIClient(_studio_discovery(indices), _manifest(indices))
+    settings = Settings(
+        app_env="test",
+        openai_api_key="test-key",
+        openai_research_model=fake.research_model,
+        openai_structured_model=fake.structured_model,
+    )
+    service = DiscoveryService(isolated_session, settings, RecordingDispatcher())
+
+    run = await service.create(DiscoveryCreate(query="gaming studios"), _local_day())
+    await CompanyDiscoveryWorkflow(isolated_session, fake, settings).execute(run.id)
+
+    results = await service.results(run.id, limit=100)
+    names = {item.company_name for item in results.items}
+    assert results.total == 40
+    assert "Studio 39" in names
+    assert "Studio 40" not in names
 
 
 def _generic_discovery(indices: list[int]) -> NormalizedDiscovery:
@@ -272,12 +429,12 @@ def _generic_manifest(indices: list[int]) -> list[dict[str, str | None]]:
         for source in (
             {
                 "source_id": f"source_{index * 2 + 1}",
-                "url": f"https://studio-{index}.example/about",
+                "url": f"https://studio-{index}.com/about",
                 "title": f"Studio {index} about",
             },
             {
                 "source_id": f"source_{index * 2 + 2}",
-                "url": f"https://studio-{index}.example/early-careers",
+                "url": f"https://studio-{index}.com/early-careers",
                 "title": f"Studio {index} early careers",
             },
         )
@@ -302,9 +459,9 @@ class _DiscoveryFetcher:
         if url.endswith("/robots.txt"):
             return SafeHttpResponse(200, url, {}, b"User-agent: *\nAllow: /")
         bodies = {
-            "https://studio-0.example/early-careers": self.LISTING,
-            "https://studio-1.example/early-careers": self.EMBEDDED,
-            "https://studio-2.example/early-careers": self.INFORMATIONAL,
+            "https://studio-0.com/early-careers": self.LISTING,
+            "https://studio-1.com/early-careers": self.EMBEDDED,
+            "https://studio-2.com/early-careers": self.INFORMATIONAL,
         }
         body = bodies.get(url)
         if body is None:
@@ -332,18 +489,17 @@ async def test_discovery_resolves_only_budgeted_careers_pages(
 
     results = {item.company_name: item for item in (await service.results(run.id, limit=100)).items}
     assert results["Studio 0"].monitoring_support == "generic_verified"
-    assert results["Studio 0"].scores.careers_page_support == 75
-    assert results["Studio 0"].scores.current_openings == 100
+    assert results["Studio 0"].current_openings_count == 4
     assert results["Studio 1"].monitoring_support == "structured"
     assert results["Studio 1"].careers_url == "https://boards.greenhouse.io/studio1"
     assert results["Studio 2"].monitoring_support == "unsupported"
-    assert results["Studio 2"].careers_url_status == "evidence_verified"
+    assert results["Studio 2"].careers_url_status == "page_checked"
     assert results["Studio 2"].careers_url_reason == "CAREERS_PAGE_NO_LISTING_FOUND"
 
     # The fourth candidate is outside the budget: unresolved, never fetched, still shown.
     assert results["Studio 3"].monitoring_support == "generic_pending"
     assert results["Studio 3"].careers_url_reason == "CAREERS_RESOLUTION_SKIPPED_BUDGET"
-    assert "https://studio-3.example/early-careers" not in fetcher.requests
+    assert "https://studio-3.com/early-careers" not in fetcher.requests
 
     # A page with no listing must never become a pollable source.
     sources = list(
@@ -354,7 +510,7 @@ async def test_discovery_resolves_only_budgeted_careers_pages(
         ).all()
     )
     monitored = {source.careers_url for source in sources}
-    assert "https://studio-2.example/early-careers" not in monitored
+    assert "https://studio-2.com/early-careers" not in monitored
 
 
 async def test_discovery_without_a_fetcher_performs_no_http_and_stays_pending(
@@ -376,7 +532,7 @@ async def test_discovery_without_a_fetcher_performs_no_http_and_stays_pending(
     results = await service.results(run.id, limit=100)
     assert results.items
     assert all(item.monitoring_support == "generic_pending" for item in results.items)
-    assert all(item.scores.current_openings == 0 for item in results.items)
+    assert all(item.current_openings_count == 0 for item in results.items)
 
 
 async def test_daily_history_uses_local_day_boundaries_and_lists_only_root_runs(

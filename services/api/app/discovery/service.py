@@ -32,11 +32,10 @@ from app.discovery.schemas import (
     DiscoveryResultsResponse,
     DiscoveryRunResponse,
     DiscoverySaveResponse,
-    DiscoveryScoreBreakdown,
-    DiscoverySource,
 )
+from app.discovery.validation import legacy_careers_url_status
 
-PROMPT_VERSION = "company-discovery-v4"
+PROMPT_VERSION = "company-discovery-v5"
 MAX_RESULTS_PER_RESEARCH_RUN = 40
 
 
@@ -324,7 +323,7 @@ class DiscoveryService:
                         ),
                         DiscoveryRun.status == "succeeded",
                     )
-                    .order_by(DiscoveryRun.continuation_index, DiscoveryResult.rank)
+                    .order_by(func.lower(Company.canonical_name), Company.id)
                 )
             ).all()
         )
@@ -345,16 +344,14 @@ class DiscoveryService:
             else set()
         )
         items: list[DiscoveryResultResponse] = []
-        for global_index, (result, company, industry, _continuation_index) in enumerate(
-            page_rows, start=offset + 1
-        ):
+        for result, company, industry, _continuation_index in page_rows:
             metadata = industry.evidence_json if industry is not None else {}
-            source_items = metadata.get("sources", [])
             careers_url = metadata.get("careers_url")
             legacy_support = metadata.get("careers_page_support", "unavailable")
-            careers_url_status = metadata.get(
-                "careers_url_status",
-                "evidence_verified" if careers_url else "not_found",
+            careers_url_status = legacy_careers_url_status(
+                metadata.get("careers_url_status"),
+                careers_url=careers_url,
+                reason=metadata.get("careers_url_reason"),
             )
             monitoring_support = metadata.get(
                 "monitoring_support",
@@ -368,22 +365,16 @@ class DiscoveryService:
                 DiscoveryResultResponse(
                     id=result.id,
                     company_id=company.id,
-                    rank=global_index,
                     company_name=company.canonical_name,
+                    official_website_url=company.official_website_url,
                     careers_url=careers_url,
-                    opportunity_score=result.opportunity_score,
-                    scores=DiscoveryScoreBreakdown(
-                        industry=result.industry_score,
-                        historical_h1b_sponsorship=result.sponsorship_score,
-                        internship=result.internship_score,
-                        careers_page_support=result.monitorability_score,
-                        current_openings=result.current_openings_score,
-                    ),
+                    research_source_status=result.research_source_status,
+                    internship_research_reported=result.internship_research_reported,
+                    current_openings_count=int(metadata.get("current_openings_count", 0)),
                     explanation=result.explanation,
                     historical_h1b_status=metadata.get("historical_h1b_status", "unresolved"),
                     certified_h1b_cases=int(metadata.get("certified_h1b_cases", 0)),
                     loaded_fiscal_years=metadata.get("loaded_fiscal_years", []),
-                    internship_evidence=bool(metadata.get("internship_evidence", False)),
                     careers_url_status=careers_url_status,
                     careers_url_reason=metadata.get(
                         "careers_url_reason",
@@ -392,7 +383,6 @@ class DiscoveryService:
                         else "CAREERS_SOURCE_NOT_SELECTED",
                     ),
                     monitoring_support=monitoring_support,
-                    sources=[DiscoverySource.model_validate(item) for item in source_items],
                     is_hidden=result.is_hidden,
                     is_saved=company.id in saved_ids,
                 )
@@ -499,8 +489,9 @@ class DiscoveryService:
             (
                 await self.session.scalars(
                     select(DiscoveryResult)
+                    .join(Company, Company.id == DiscoveryResult.company_id)
                     .where(DiscoveryResult.discovery_run_id == source_run.id)
-                    .order_by(DiscoveryResult.rank)
+                    .order_by(func.lower(Company.canonical_name), Company.id)
                 )
             ).all()
         )
@@ -509,13 +500,8 @@ class DiscoveryService:
                 DiscoveryResult(
                     discovery_run_id=run.id,
                     company_id=source.company_id,
-                    rank=source.rank,
-                    opportunity_score=source.opportunity_score,
-                    industry_score=source.industry_score,
-                    sponsorship_score=source.sponsorship_score,
-                    internship_score=source.internship_score,
-                    monitorability_score=source.monitorability_score,
-                    current_openings_score=source.current_openings_score,
+                    research_source_status=source.research_source_status,
+                    internship_research_reported=source.internship_research_reported,
                     explanation=source.explanation,
                     is_hidden=False,
                 )

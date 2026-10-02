@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class StrictAIModel(BaseModel):
@@ -31,15 +31,13 @@ class CompanyProposal(StrictAIModel):
     canonical_name: str = Field(min_length=2, max_length=160)
     aliases: list[str]
     proposed_legal_entities: list[str]
-    official_website_url: HttpUrl
+    official_website_url: str | None = Field(max_length=2048)
     official_careers_source_id: str | None = Field(
         pattern=r"^source_[1-9][0-9]*$",
     )
-    industry_relevance: int = Field(ge=0, le=100)
     industry_explanation: str = Field(min_length=10, max_length=1200)
-    has_internship_evidence: bool
+    internship_research_reported: bool
     source_references: list[SourceReference]
-    unresolved_questions: list[str]
 
 
 class NormalizedDiscovery(StrictAIModel):

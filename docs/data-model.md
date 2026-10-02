@@ -31,7 +31,8 @@ same source file idempotent.
 
 Milestone 3 activates `industry_queries`, `discovery_runs`, `discovery_results`,
 `company_industries`, and `ai_runs`. `industry_queries` owns the seven-day cache key and expiry.
-Every request still receives its own `discovery_runs` row; a cache hit clones ranked score rows and
+Every request still receives its own `discovery_runs` row; a cache hit clones categorical result rows,
+resets `is_hidden=false`, and
 records `cache_hit=true`, while making no AI run. `ai_runs` stores redacted inputs and outputs,
 source manifests, token counts, repair attempts, timestamps, and estimated cost. Migration
 `2f1a3c7d9e11` adds the cache marker and bounded requested limit to discovery runs.
@@ -50,7 +51,14 @@ recomputed at local midnight. Local formatting and local calendar boundaries bel
 which avoids coupling database correctness to a manually configured timezone or daylight-saving
 transition.
 
-Careers provenance does not require another table or migration. Each `company_industries` evidence
-JSON object stores the resolved manifest `source_id`, exact verified careers URL, URL status, stable
-reason code, and monitoring-support classification. The API synthesizes the new fields for older
-cached evidence rows so existing local data remains readable.
+Migration `a1b2c3d4e5f6` removes discovery rank/score columns,
+`company_industries.relevance_score`, and alias/legal/evidence confidence columns. It adds
+`discovery_results.research_source_status` and `internship_research_reported`. The downgrade restores
+neutral numerical columns and alphabetical per-run ranks for structural compatibility; removed
+historical numbers cannot be reconstructed.
+
+Each `company_industries.evidence_json` object keeps the accepted careers URL, URL status/reason,
+monitoring support, resolver version, opening count, and DOL facts. General sources and internship
+flags are no longer stored there. Legacy `evidence_verified` values are rewritten by the migration
+and translated again on read for rolling-upgrade safety. `CompanyEvidence` remains available for
+other evidence, but new discovery runs do not create industry or internship evidence rows.

@@ -50,7 +50,6 @@ async def get_company_evidence(company_id: UUID, session: Session) -> list[Evide
             source_domain=item.source_domain,
             is_official_source=item.is_official_source,
             observed_at=item.observed_at,
-            confidence=float(item.confidence),
         )
         for item in evidence
     ]

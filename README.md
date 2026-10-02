@@ -130,12 +130,13 @@ role, keyword, location, and work-arrangement preferences. Then open
 
 The API immediately returns a queued run. The Celery worker performs bounded web research and one
 strictly structured normalization call. Research sources receive stable run-local IDs, and the
-model selects a careers source by ID; deterministic code resolves it back to the authoritative URL,
-validates company identity, and classifies URL evidence separately from monitoring support. Invalid
-candidates are skipped without failing valid ones. The worker computes the documented score and
-stores up to 40 verified results per research run. The result page automatically loads all persisted
-result pages, displays every score component and evidence source, explains missing or rejected careers evidence, and allows
-saving one company, saving every visible company with a verified careers source, or reversibly hiding a result. A hidden result remains as a compact row with a **Show result**
+model may select a careers source by ID; deterministic code resolves that careers source while
+treating general source matching as diagnostic only. Unsafe or shared-host websites become null
+without removing the company. The worker merges duplicates, stores up to 40 suggestions, and the API
+returns them alphabetically. The result page shows matched/unmatched research state, an optional
+AI-provided website, careers inspection and monitoring state, raw opening counts, name-matched DOL
+facts, and AI-reported internship state. It allows **Save and confirm**, bulk confirmation of visible
+monitorable companies, or reversible hiding. A hidden result remains as a compact row with a **Show result**
 button and an explicit success message. There is no separate Show more results control because every
 stored result is rendered automatically without an OpenAI request. **Research more companies**
 remains available on the completed result page and shows a one-line warning below the control that the

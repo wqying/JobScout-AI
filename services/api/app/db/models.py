@@ -178,7 +178,6 @@ class CompanyAlias(Base):
             "alias_type IN ('brand', 'former_name', 'subsidiary', 'abbreviation')",
             name="alias_type_values",
         ),
-        CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_range"),
         UniqueConstraint("company_id", "normalized_alias"),
     )
 
@@ -190,7 +189,6 @@ class CompanyAlias(Base):
     normalized_alias: Mapped[str] = mapped_column(Text, nullable=False)
     alias_type: Mapped[str] = mapped_column(Text, nullable=False)
     source_url: Mapped[str | None] = mapped_column(Text)
-    confidence: Mapped[Decimal] = mapped_column(Numeric(4, 3), nullable=False)
     created_at: Mapped[datetime] = created_at()
 
 
@@ -201,7 +199,6 @@ class CompanyLegalEntity(Base):
             "match_method IN ('exact', 'ai_proposed', 'owner_verified')",
             name="match_method_values",
         ),
-        CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_range"),
         UniqueConstraint("company_id", "normalized_legal_name"),
     )
 
@@ -212,7 +209,6 @@ class CompanyLegalEntity(Base):
     legal_name: Mapped[str] = mapped_column(Text, nullable=False)
     normalized_legal_name: Mapped[str] = mapped_column(Text, nullable=False, index=True)
     match_method: Mapped[str] = mapped_column(Text, nullable=False)
-    confidence: Mapped[Decimal] = mapped_column(Numeric(4, 3), nullable=False)
     evidence_url: Mapped[str | None] = mapped_column(Text)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = created_at()
@@ -220,11 +216,6 @@ class CompanyLegalEntity(Base):
 
 class CompanyIndustry(Base):
     __tablename__ = "company_industries"
-    __table_args__ = (
-        CheckConstraint(
-            "relevance_score >= 0 AND relevance_score <= 100", name="relevance_score_range"
-        ),
-    )
 
     company_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -233,7 +224,6 @@ class CompanyIndustry(Base):
     )
     industry_slug: Mapped[str] = mapped_column(Text, primary_key=True)
     industry_label: Mapped[str] = mapped_column(Text, nullable=False)
-    relevance_score: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     evidence_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = created_at()
 
@@ -247,7 +237,6 @@ class CompanyEvidence(Base):
             name="evidence_type_values",
         ),
         CheckConstraint("status IN ('supports', 'conflicts', 'unknown')", name="status_values"),
-        CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_range"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -264,24 +253,16 @@ class CompanyEvidence(Base):
     is_official_source: Mapped[bool] = mapped_column(Boolean, nullable=False)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     content_hash: Mapped[str | None] = mapped_column(String(64))
-    confidence: Mapped[Decimal] = mapped_column(Numeric(4, 3), nullable=False)
 
 
 class DiscoveryResult(Base):
     __tablename__ = "discovery_results"
     __table_args__ = (
-        CheckConstraint("opportunity_score BETWEEN 0 AND 100", name="opportunity_score_range"),
-        CheckConstraint("industry_score BETWEEN 0 AND 100", name="industry_score_range"),
-        CheckConstraint("sponsorship_score BETWEEN 0 AND 100", name="sponsorship_score_range"),
-        CheckConstraint("internship_score BETWEEN 0 AND 100", name="internship_score_range"),
         CheckConstraint(
-            "monitorability_score BETWEEN 0 AND 100", name="monitorability_score_range"
-        ),
-        CheckConstraint(
-            "current_openings_score BETWEEN 0 AND 100", name="current_openings_score_range"
+            "research_source_status IN ('matched', 'unmatched')",
+            name="research_source_status_values",
         ),
         UniqueConstraint("discovery_run_id", "company_id", name="uq_discovery_results_run_company"),
-        UniqueConstraint("discovery_run_id", "rank", name="uq_discovery_results_run_rank"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -291,13 +272,8 @@ class DiscoveryResult(Base):
     company_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
     )
-    rank: Mapped[int] = mapped_column(SmallInteger, nullable=False)
-    opportunity_score: Mapped[int] = mapped_column(SmallInteger, nullable=False)
-    industry_score: Mapped[int] = mapped_column(SmallInteger, nullable=False)
-    sponsorship_score: Mapped[int] = mapped_column(SmallInteger, nullable=False)
-    internship_score: Mapped[int] = mapped_column(SmallInteger, nullable=False)
-    monitorability_score: Mapped[int] = mapped_column(SmallInteger, nullable=False)
-    current_openings_score: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    research_source_status: Mapped[str] = mapped_column(Text, nullable=False)
+    internship_research_reported: Mapped[bool] = mapped_column(Boolean, nullable=False)
     explanation: Mapped[str] = mapped_column(Text, nullable=False)
     is_hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     created_at: Mapped[datetime] = created_at()

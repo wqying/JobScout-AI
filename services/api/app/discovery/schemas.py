@@ -37,36 +37,20 @@ class DiscoveryListResponse(BaseModel):
     next_cursor: UUID | None = None
 
 
-class DiscoverySource(BaseModel):
-    source_id: str | None = None
-    url: str
-    title: str | None
-    source_type: str
-    supports_claims: list[str]
-
-
-class DiscoveryScoreBreakdown(BaseModel):
-    industry: int
-    historical_h1b_sponsorship: int
-    internship: int
-    careers_page_support: int
-    current_openings: int
-
-
 class DiscoveryResultResponse(BaseModel):
     id: UUID
     company_id: UUID
-    rank: int
     company_name: str
+    official_website_url: str | None
     careers_url: str | None
-    opportunity_score: int
-    scores: DiscoveryScoreBreakdown
+    research_source_status: Literal["matched", "unmatched"]
+    internship_research_reported: bool
+    current_openings_count: int
     explanation: str
     historical_h1b_status: Literal["historical_records", "no_records", "unresolved"]
     certified_h1b_cases: int
     loaded_fiscal_years: list[int]
-    internship_evidence: bool
-    careers_url_status: Literal["evidence_verified", "not_found", "rejected"]
+    careers_url_status: Literal["research_linked", "page_checked", "not_found", "rejected"]
     careers_url_reason: str
     monitoring_support: Literal[
         "structured",
@@ -74,7 +58,6 @@ class DiscoveryResultResponse(BaseModel):
         "generic_pending",
         "unsupported",
     ]
-    sources: list[DiscoverySource]
     is_hidden: bool
     is_saved: bool
 
