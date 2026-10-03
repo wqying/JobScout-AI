@@ -110,19 +110,10 @@ class OpenAIResponsesClient:
                 "model": self.research_model,
                 "store": False,
                 "instructions": (
-                    "Research US employers matching the requested industry. Find up to 40 "
-                    "plausible candidates and state uncertainty where evidence is thin. Identify "
-                    "official websites and sources for industry fit and internships when "
-                    "available. "
-                    "For the careers page, cite the page that LISTS INDIVIDUAL OPEN ROLES with "
-                    "clickable job titles: an applicant-tracking board root such as a Greenhouse, "
-                    "Lever, Ashby, or SmartRecruiters board, or an 'all open positions' page on "
-                    "the company's own domain. An early-careers, university-recruiting, "
-                    "student-programs, or 'life at' landing page is NOT an acceptable careers "
-                    "page unless individual openings are listed on it; when only such a page is "
-                    "available, follow its link to the job listing and cite that instead. "
-                    "Sponsorship history will be calculated separately from official DOL data; "
-                    "do not promise it."
+"For every company, try to find a useful employment link."
+"Prefer a page listing current individual openings."
+"If none is found, look for an official careers, internships, student-program, or early-careers page and include it as an informational link."
+"State which kind of page you found. Do not imply that an informational page has current openings. Do not invent links."
                 ),
                 "input": (f"Industry query: {query}\nCountry: {country}{exclusion_text}"),
                 "tools": [{"type": "web_search"}],
