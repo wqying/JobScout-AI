@@ -1104,11 +1104,15 @@ and cost is estimated from `OPENAI_INPUT_COST_PER_MILLION_USD`,
 Application code performs URL safety checks, identity preparation, bounded careers fetching,
 categorical validation, and persistence.
 
-The research instruction must ask for the page that **lists individual openings** — a provider board
-root or an "all open positions" page — and must state that an early-careers, university-recruiting,
-or student-programs landing page is not an acceptable careers source unless it lists individual
-openings. This is a nudge on seed quality only. It is not trusted: Section 13.7 verifies the page by
-fetching it, because the model cannot see whether a cited URL lists jobs.
+The current research instruction asks for a useful employment link for every company, preferring a
+page that **lists current individual openings**. If none is found, it asks for an official careers,
+internships, student-program, or early-careers page as an informational link. The model must state
+which kind of page it found, must not imply that an informational page has current openings, and
+must not invent links. Normalization and careers-source validation still require a matching source
+in the supplied manifest. Link inclusion is separate from automatic monitoring: Section 13.7
+inspects eligible cited pages for a usable job listing, and an inspected page with no listing keeps
+its URL while being marked unsupported for monitoring. This stage does not perform a separate web
+search for companies whose careers link is missing.
 
 **Budget warning.** The research call's `max_tool_calls` bound is the main lever on result yield. With
 too few web searches the model may return plausible company names it never actually visited. Those

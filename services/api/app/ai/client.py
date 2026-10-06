@@ -110,10 +110,12 @@ class OpenAIResponsesClient:
                 "model": self.research_model,
                 "store": False,
                 "instructions": (
-"For every company, try to find a useful employment link."
-"Prefer a page listing current individual openings."
-"If none is found, look for an official careers, internships, student-program, or early-careers page and include it as an informational link."
-"State which kind of page you found. Do not imply that an informational page has current openings. Do not invent links."
+                    "For every company, try to find a useful employment link."
+                    "Prefer a page listing current individual openings."
+                    "If none is found, look for an official careers, internships, student-program, "
+                    "or early-careers page and include it as an informational link."
+                    "State which kind of page you found. Do not imply that an informational page "
+                    "has current openings. Do not invent links."
                 ),
                 "input": (f"Industry query: {query}\nCountry: {country}{exclusion_text}"),
                 "tools": [{"type": "web_search"}],
@@ -265,6 +267,7 @@ def _extract_output_text(payload: dict[str, Any]) -> str:
 
 
 def _extract_sources(payload: dict[str, Any]) -> list[dict[str, str | None]]:
+    """deduplicates exact URLs"""
     by_url: dict[str, dict[str, str | None]] = {}
     for item in payload.get("output", []):
         if not isinstance(item, dict):
